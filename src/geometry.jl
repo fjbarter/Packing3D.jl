@@ -84,6 +84,68 @@ rule for the last interval."
 end
 
 
+function triple_cap_analytical(R_p, a, b, z_min, z_max)
+
+    # Predefined constants (using multiplication rather than division)
+    half      = 0.5
+    quarter   = 0.25
+    one_third = 0.3333333333333333
+    one_sixth = 0.16666666666666666
+    pi_val    = pi
+
+    # Helper functions to safely compute square roots and inverse sines.
+    # Instead of throwing an error on a negative radicand we use max(0,·).
+    safe_sqrt(x) = sqrt(max(0, x))
+    # For division, if the denominator is near zero we return zero.
+    safe_div(x, y) = abs(y) < 1e-12 ? 0.0 : x / y
+    # Clamp the argument for asin into [-1, 1] to prevent domain errors.
+    safe_asin(x) = asin(clamp(x, -1, 1))
+
+    # Precompute quantities that do not depend on z.
+    R_p2   = R_p * R_p
+    R_p3   = R_p2 * R_p
+    sqrt_Rpa = safe_sqrt(R_p2 - a * a)
+    sqrt_Rpb = safe_sqrt(R_p2 - b * b)
+    # If the cap boundaries are degenerate (e.g. a or b are on or outside the sphere),
+    # there is no sensible cap volume.
+    if sqrt_Rpa == 0 || sqrt_Rpb == 0
+        return 0.0
+    end
+
+    # Define a helper function to compute the antiderivative at a given z.
+    # (This corresponds to the integrals computed in triple_cap_antiderivative.)
+    function F(z)
+        # Use safe_sqrt to ensure nonnegative radicands.
+        sqrt_Rpz  = safe_sqrt(R_p2 - z*z)
+        sqrt_Rpaz = safe_sqrt(R_p2 - a*a - z*z)
+        sqrt_Rpbz = safe_sqrt(R_p2 - b*b - z*z)
+
+        # The trigonometric functions in the expression depend on z.
+        # We use safe_div to avoid division-by-zero and safe_asin to clamp arguments.
+        asin_z_a  = safe_asin(safe_div(z, sqrt_Rpa))
+        asin_a_z  = safe_asin(safe_div(a, sqrt_Rpz))
+        atan_a    = atan(safe_div(a * z, R_p * (sqrt_Rpaz + 1e-12)))
+        asin_z_b  = safe_asin(safe_div(z, sqrt_Rpb))
+        asin_b_z  = safe_asin(safe_div(b, sqrt_Rpz))
+        atan_b    = atan(safe_div(b * z, R_p * (sqrt_Rpbz + 1e-12)))
+        z3        = z * z * z
+
+        T1 = quarter * pi_val * (R_p2 * z - one_third * z3)
+        T2 = ((one_sixth * z3 - half * R_p2 * z) * asin_a_z + one_third * R_p3 * atan_a)
+        T3 = (one_sixth * a * (a*a - 3 * R_p2) * asin_z_a - one_third * a * z * sqrt_Rpaz)
+        T4 = ((one_sixth * z3 - half * R_p2 * z) * asin_b_z + one_third * R_p3 * atan_b)
+        T5 = (one_sixth * b * (b*b - 3 * R_p2) * safe_asin(safe_div(b, sqrt_Rpz)) - one_third * b * z * sqrt_Rpbz)
+        T6 = a * b * z
+
+        return T1 + T2 + T3 + T4 + T5 + T6
+    end
+
+    # Return the definite volume as the difference between the antiderivative evaluated at z_max and z_min.
+    return F(z_max) - F(z_min)
+end
+
+
+
 function triple_cap_integrator(R, a, b,
                           c_lim_lower, c_lim_upper;
                           num_simpson_sample_points=7)
@@ -233,8 +295,9 @@ end
     # The double cap intersection is symmetrical, so c_lim_lower is set to 0
     # and the volume doubled
     c_lim_lower = 0
-    return 2*triple_cap_integrator(R, a, b, c_lim_lower, c_lim_upper;
-                                   num_simpson_sample_points=3)
+    # return 2*triple_cap_integrator(R, a, b, c_lim_lower, c_lim_upper;
+    #                                num_simpson_sample_points=3)
+    return 2*triple_cap_analytical(R, a, b, c_lim_lower, c_lim_upper)
 end
 
 
@@ -325,7 +388,8 @@ end
         c_lim_lower = c
     end
 
-    return triple_cap_integrator(R, a, b, c_lim_lower, c_lim_upper)
+    # return triple_cap_integrator(R, a, b, c_lim_lower, c_lim_upper)
+    return triple_cap_analytical(R, a, b, c_lim_lower, c_lim_upper)
 
 end
 

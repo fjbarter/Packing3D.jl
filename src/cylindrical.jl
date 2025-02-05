@@ -662,12 +662,12 @@ function calculate_lacey(data_1::Dict,
 
     if isnothing(cylinder_radius)
         cylinder_radius = estimated_cylinder_radius
-        println("No cylinder radius provided, using esimation: $(cylinder_radius)")
+        # println("No cylinder radius provided, using esimation: $(cylinder_radius)")
     end
 
     if isnothing(cylinder_base_level)
         cylinder_base_level = estimated_cylinder_base_level
-        println("No cylinder base level provided, using esimation: $(cylinder_base_level)")
+        # println("No cylinder base level provided, using esimation: $(cylinder_base_level)")
     end
 
     # Step 3: Compute total volumes of both datasets
@@ -736,8 +736,8 @@ function calculate_lacey(data_1::Dict,
     # Step 6.5: Compute Total Packing Density per Cell
     total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
     
-    println("Total of assigned cell volumes: $(sum(total_particle_volume_per_cell))")
-    println("Actual total particle volume:   $(sum(particle_volumes_1) + sum(particle_volumes_2))")
+    # println("Total of assigned cell volumes: $(sum(total_particle_volume_per_cell))")
+    # println("Actual total particle volume:   $(sum(particle_volumes_1) + sum(particle_volumes_2))")
 
     conc_mean_valid = sum(volume_per_cell_1) / sum(total_particle_volume_per_cell)
 
@@ -788,9 +788,9 @@ function calculate_lacey(data_1::Dict,
     # # Maximum variance (complete segregation, binomial distribution assumption)
     # S_maximum = conc_mean_valid * (1 - conc_mean_valid)
 
-    println("S_random: $S_random")
-    println("S_maximum: $S_maximum")
-    println("S_actual: $S_actual")
+    # println("S_random: $S_random")
+    # println("S_maximum: $S_maximum")
+    # println("S_actual: $S_actual")
 
 
     # Final calculation of Lacey index
