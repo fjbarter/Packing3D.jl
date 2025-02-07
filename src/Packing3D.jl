@@ -1,4 +1,5 @@
-# packing3d.jl
+# Packing3D.jl # CASE SENSITIVE
+
 # This is the parent module for the packing3d package
 module Packing3D
 
