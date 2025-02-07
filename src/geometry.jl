@@ -106,11 +106,6 @@ function triple_cap_analytical(R_p, a, b, z_min, z_max)
     R_p3   = R_p2 * R_p
     sqrt_Rpa = safe_sqrt(R_p2 - a * a)
     sqrt_Rpb = safe_sqrt(R_p2 - b * b)
-    # If the cap boundaries are degenerate (e.g. a or b are on or outside the sphere),
-    # there is no sensible cap volume.
-    if sqrt_Rpa == 0 || sqrt_Rpb == 0
-        return 0.0
-    end
 
     # Define a helper function to compute the antiderivative at a given z.
     # (This corresponds to the integrals computed in triple_cap_antiderivative.)

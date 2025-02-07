@@ -4,7 +4,7 @@
 
 module Cylindrical
 
-export compute_packing_cylindrical, calculate_segregation_intensity, calculate_lacey, calculate_lacey_old
+export compute_packing_cylindrical, calculate_segregation_intensity, calculate_lacey
 
 # Import functions and structs from relevant modules
 include("io.jl")
@@ -280,326 +280,55 @@ Calculate the segregation intensity for two particle datasets within a cylindric
 # Returns
 - `Float64`: Segregation intensity, a dimensionless value ranging from 0 (perfectly mixed) to 1 (completely segregated). Returns `NaN` if no valid cells are found.
 """
-function calculate_segregation_intensity(
-    data_1::Dict, data_2::Dict, 
-    cylinder_radius::Float64,
-    cylinder_base_level::Float64, 
-    cylinder_height::Float64;
-    target_num_cells::Int=200,
-    packing_threshold::Float64=0.05,
-    calculate_partial_volumes::Bool=true
-)::Float64
-    # Step 1: Determine mesh divisions
-    z_divisions = max(1, round(Int, target_num_cells^(1 / 3)))
-    num_cells_slice = target_num_cells / z_divisions
-    theta_divisions = 3  # Fixed as per original code
-    r_divisions = max(1, round(Int, sqrt(num_cells_slice)))
+function calculate_segregation_intensity(data_1::Dict,
+                                         data_2::Dict
+                                         ;
+                                         cylinder_radius::Union{<:Real, Nothing}=nothing,
+                                         cylinder_base_level::Union{<:Real, Nothing}=nothing,
+                                         cylinder_height::Union{<:Real, Nothing}=nothing,
+                                         target_num_cells::Union{<:Real, Nothing}=nothing,
+                                         output_num_cells::Bool=false,
+                                         calculate_partial_volumes::Bool=true,
+                                         clamp_0_to_1::Bool=true,
+                                         verbose::Bool=false)::Float64
 
-    # Step 2: Extract particle data from both datasets
-    x_data_1, y_data_1, z_data_1, radii_1 = retrieve_coordinates(data_1)
-    x_data_2, y_data_2, z_data_2, radii_2 = retrieve_coordinates(data_2)
+    volume_per_cell_1, volume_per_cell_2 = compute_volume_per_cell(
+        data_1,
+        data_2;
+        cylinder_radius=cylinder_radius,
+        cylinder_base_level=cylinder_base_level,
+        cylinder_height=cylinder_height,
+        target_num_cells=target_num_cells,
+        output_num_cells=output_num_cells,
+        calculate_partial_volumes=calculate_partial_volumes,
+        verbose=verbose
+    )
+    # Calculate concentration of type 1 in each cell (type agnostic)
+    total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
 
-    # Convert Cartesian to cylindrical coordinates
-    r_data_1, theta_data_1 = convert_to_cylindrical(x_data_1, y_data_1)
-    r_data_2, theta_data_2 = convert_to_cylindrical(x_data_2, y_data_2)
+    total_particle_volume = sum(total_particle_volume_per_cell)
 
-    factor_1 = calculate_angular_overlap_factor(r_data_1, radii_1)
-    factor_2 = calculate_angular_overlap_factor(r_data_2, radii_2)
-
-    # Step 3: Compute total volumes of both datasets
-    particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
-    particle_volumes_2 = (4 / 3) * π * (radii_2 .^ 3)
-    total_volume_1 = sum(particle_volumes_1)
-    total_volume_2 = sum(particle_volumes_2)
-    conc_mean = total_volume_1 / (total_volume_1 + total_volume_2)
-
-    # Step 4: Create the cylindrical mesh
-    divisions = Dict("r" => r_divisions, "theta" => theta_divisions, "z" => z_divisions)
-    params = Dict("cylinder_radius" => cylinder_radius, 
-                  "cylinder_base_level" => cylinder_base_level, 
-                  "cylinder_height" => cylinder_height)
-
-    cylindrical_mesh = Mesh(:cylindrical, divisions; params=params)
-    mesh_boundaries = get_mesh_boundaries(cylindrical_mesh)
-    num_cells = get_total_cells(cylindrical_mesh)
-
-    # Step 5: Initialize sparse arrays for packing densities
-    concs_1_sparse = fill(NaN, num_cells)
-
-    # Compute cell volume using the first cell's boundaries
-    cell_volume = pi * (cylinder_radius / r_divisions)^2 * (cylinder_height / z_divisions)
-
-
-    # Step 6: Decide whether to calculate partial volumes or not
-    if calculate_partial_volumes
-        # Loop through all cells and calculate packing densities, then concentration of species 1
-        for index in 1:num_cells
-            boundaries = mesh_boundaries[index, :]
-
-            # Compute packing densities for data_1 and data_2
-            packing_density_1 = compute_packing_cylindrical(; boundaries=boundaries, 
-                                                              r_data=r_data_1, 
-                                                              theta_data=theta_data_1, 
-                                                              z_data=z_data_1, 
-                                                              radii=radii_1, 
-                                                              accurate_cylindrical=false)
-
-            packing_density_2 = compute_packing_cylindrical(; boundaries=boundaries, 
-                                                              r_data=r_data_2, 
-                                                              theta_data=theta_data_2, 
-                                                              z_data=z_data_2, 
-                                                              radii=radii_2, 
-                                                              accurate_cylindrical=false)
-
-            # Total packing density
-            packing_density_total = packing_density_1 + packing_density_2
-
-            # Exclude cells with low packing density
-            if packing_density_total > packing_threshold
-                concs_1_sparse[index] = packing_density_1 / packing_density_total
-            else
-                concs_1_sparse[index] = NaN
-            end
-        end
-    else
-        # Binning and Aggregation
-
-        # Step 6.1: Define bin sizes
-        dr = cylinder_radius / r_divisions
-        dz = cylinder_height / z_divisions
-
-        # Step 6.2: Helper Function to Compute Linear Cell Index
-        function compute_cell_index(r, theta, z)
-            # Compute z_idx
-            z_idx = Int(floor((z - cylinder_base_level) / dz)) + 1
-            z_idx = clamp(z_idx, 1, z_divisions)
-
-            # Compute r_idx
-            r_idx = Int(floor(r / dr)) + 1
-            r_idx = clamp(r_idx, 1, r_divisions)
-
-            # Compute theta_idx based on r_idx
-            if r_idx == 1
-                theta_idx = 1
-            else
-                # Number of theta divisions for this r_idx
-                current_theta_div = 2 * r_idx - 1
-
-                # Size of each theta bin
-                d_theta = 2 * π / current_theta_div
-
-                # Normalize theta to [0, 2π)
-                theta_norm = mod(theta, 2 * π)
-
-                # Compute theta_idx
-                theta_idx = Int(floor(theta_norm / d_theta)) + 1
-                theta_idx = clamp(theta_idx, 1, current_theta_div)
-            end
-
-            # Compute cell_index within the current z layer
-            if r_idx == 1
-                cell_index_in_z = 1
-            else
-                # Cells are ordered with the inner cell first, followed by radial and angular cells
-                # cell_index_in_z = 1 + sum_{i=2}^{r_idx} (2*i -1) + theta_idx
-                # Since sum_{i=2}^{r_idx} (2*i -1) = r_idx^2 -1
-                cell_index_in_z = r_idx^2 + theta_idx
-            end
-
-            # Compute the global cell index
-            global_cell_index = (z_idx - 1) * r_divisions^2 + cell_index_in_z
-
-            return global_cell_index
-        end
-
-        # Step 6.3: Assign Particles to Cells for Both Datasets
-        # Preallocate arrays for cell indices
-        num_particles_1 = length(r_data_1)
-        cell_indices_1 = Vector{Int}(undef, num_particles_1)
-
-        num_particles_2 = length(r_data_2)
-        cell_indices_2 = Vector{Int}(undef, num_particles_2)
-
-        # Assign cell indices for data_1
-        for i in 1:num_particles_1
-            cell_indices_1[i] = compute_cell_index(r_data_1[i], theta_data_1[i], z_data_1[i])
-        end
-
-        # Assign cell indices for data_2
-        for i in 1:num_particles_2
-            cell_indices_2[i] = compute_cell_index(r_data_2[i], theta_data_2[i], z_data_2[i])
-        end
-
-        # Step 6.4: Aggregate Volumes per Cell
-        volume_per_cell_1 = zeros(Float64, num_cells)
-        volume_per_cell_2 = zeros(Float64, num_cells)
-
-        for i in 1:length(cell_indices_1)
-            idx = cell_indices_1[i]
-            # Ensure the cell index is within valid range
-            if idx >=1 && idx <= num_cells
-                volume_per_cell_1[idx] += particle_volumes_1[i]
-            else
-                # Optionally, handle particles outside the mesh boundaries
-                # For now, ignore them
-            end
-        end
-
-        for i in 1:length(cell_indices_2)
-            idx = cell_indices_2[i]
-            if idx >=1 && idx <= num_cells
-                volume_per_cell_2[idx] += particle_volumes_2[i]
-            else
-                # Optionally, handle particles outside the mesh boundaries
-                # For now, ignore them
-            end
-        end
-
-        # Step 6.5: Compute Total Packing Density per Cell
-        total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
-
-        # Step 6.6: Compute Concentration of Species 1
-        # Initialize with NaN
-        concs_1_sparse = fill(NaN, num_cells)
-
-        # Determine which cells meet the packing density threshold
-        valid_cells_mask = total_particle_volume_per_cell .> packing_threshold .* cell_volume
-
-        # Calculate concentration for valid cells
-        concs_1_sparse[valid_cells_mask] = volume_per_cell_1[valid_cells_mask] ./ total_particle_volume_per_cell[valid_cells_mask]
-
-    end
-
-    # Step 7: Remove NaNs and count valid cells
-    concs_1_filtered = filter(!isnan, concs_1_sparse)
-    num_valid_cells = length(concs_1_filtered)
-
-    num_invalid_cells = num_cells - num_valid_cells
-
-    if num_invalid_cells > 0.5 * num_cells
-        println("Unusually high number of invalid cells: $(num_invalid_cells) out of $(num_cells)")
-    end
-
-    if num_valid_cells == 0
-        return NaN  # No valid cells
-    end
-
-    # Step 8: Calculate segregation intensity
-    numerator = sum((concs_1_filtered .- conc_mean).^2)
-    I_S_max = sqrt(conc_mean * (1 - conc_mean))
-    segregation_intensity = sqrt(numerator / num_valid_cells) / I_S_max
-
-    return segregation_intensity
-end
-
-
-function calculate_lacey_old(data_1::Dict,
-                             data_2::Dict,
-                             cylinder_radius::Float64,
-                             cylinder_base_level::Float64,
-                             cylinder_height::Float64,
-                             ;
-                             target_num_cells::Int=200,
-                             packing_threshold::Float64=0.05,
-                             output_num_cells::Bool=false,
-                             calculate_partial_volumes::Bool=true,
-                             clamp_0_to_1::Bool=true)::Float64
-    # Step 1: Determine mesh divisions
-    z_divisions = Int(round(target_num_cells^(1 / 3)))
-    num_cells_slice = target_num_cells / z_divisions
-    theta_divisions = 3
-    r_divisions = Int(round(sqrt(num_cells_slice)))
-
-    num_cells = Int(round(z_divisions * r_divisions^2))
-    if output_num_cells
-        println("Target number of cells: $target_num_cells, Actual number: $num_cells")
-    end
-
-    radius_inner = cylinder_radius / r_divisions
-    cell_volume = π * radius_inner^2 * cylinder_height / z_divisions
-
-    # Step 2: Extract particle data from both datasets
-    x_data_1, y_data_1, z_data_1, radii_1 = retrieve_coordinates(data_1)
-    x_data_2, y_data_2, z_data_2, radii_2 = retrieve_coordinates(data_2)
-
-    # Convert Cartesian to cylindrical coordinates
-    r_data_1, theta_data_1 = convert_to_cylindrical(x_data_1, y_data_1)
-    r_data_2, theta_data_2 = convert_to_cylindrical(x_data_2, y_data_2)
-
-    # Step 3: Create the cylindrical mesh
-    divisions = Dict("r" => r_divisions, "theta" => theta_divisions, "z" => z_divisions)
-    params = Dict("cylinder_radius" => cylinder_radius,
-                  "cylinder_base_level" => cylinder_base_level,
-                  "cylinder_height" => cylinder_height)
-
-    cylindrical_mesh = Mesh(:cylindrical, divisions; params=params)
-    mesh_boundaries = cylindrical_mesh.cell_boundaries
-    num_cells = cylindrical_mesh.total_cells
-
-    # Step 4: Initialize sparse arrays
-    concs_1_sparse = fill(NaN, num_cells)
-    particle_volumes_sparse = fill(NaN, num_cells)
-
-    # Step 5: Compute packing densities and volumes for each cell
-    for index in 1:num_cells
-        boundaries = mesh_boundaries[index, :]
-
-        # Compute packing densities for data_1 and data_2
-        packing_density_1 = compute_packing_cylindrical(; boundaries=boundaries,
-                                                        r_data=r_data_1,
-                                                        theta_data=theta_data_1,
-                                                        z_data=z_data_1,
-                                                        radii=radii_1,
-                                                        accurate_cylindrical=false)
-
-        packing_density_2 = compute_packing_cylindrical(; boundaries=boundaries,
-                                                        r_data=r_data_2,
-                                                        theta_data=theta_data_2,
-                                                        z_data=z_data_2,
-                                                        radii=radii_2,
-                                                        accurate_cylindrical=false)
-
-        packing_density_total = packing_density_1 + packing_density_2
-
-        # Exclude cells with low packing density
-        if packing_density_total > packing_threshold
-            conc_1 = packing_density_1 / packing_density_total
-            concs_1_sparse[index] = conc_1
-            particle_volumes_sparse[index] = packing_density_total * cell_volume
-        end
-    end
-
-    # Step 6: Filter valid cells
-    concs_1 = filter(!isnan, concs_1_sparse)
-    particle_volumes = filter(!isnan, particle_volumes_sparse)
-
-    num_valid_cells = length(concs_1)
-
-    # Step 7: Compute effective particles per cell
-    eff_particles_per_cell = sum(particle_volumes)^2 / sum(particle_volumes.^2)
-
-    # Step 8: Compute weighted concentration mean
-    weighted_conc_mean = sum(concs_1 .* particle_volumes) / sum(particle_volumes)
-
-    # Step 9: Handle edge cases
-    if num_valid_cells <= 1
+    if total_particle_volume == 0
+        println("Total particle volume calculated as zero, returning NaN")
         return NaN
     end
 
-    # Step 10: Compute Lacey index
-    # Actual variance of concentrations
-    S_actual = sum((concs_1 .- weighted_conc_mean).^2) / num_valid_cells
+    conc_mean = sum(volume_per_cell_1) / total_particle_volume
 
-    # Random variance (binomial distribution assumption)
-    S_random = weighted_conc_mean * (1 - weighted_conc_mean) / eff_particles_per_cell
+    # Calculate concentration for occupied cells (0 if unoccupied)
+    concs_1 = ifelse.(
+        total_particle_volume_per_cell .== 0,
+        0.0,
+        volume_per_cell_1 ./ total_particle_volume_per_cell
+    )
 
-    # Maximum variance (complete segregation)
-    S_maximum = weighted_conc_mean * (1 - weighted_conc_mean)
+    # Step 8: Calculate segregation intensity
+    weighted_numerator = sum(total_particle_volume_per_cell .* ((concs_1 .- conc_mean).^2)) / total_particle_volume
+    I_S_max = sqrt(conc_mean * (1 - conc_mean))
+    segregation_intensity = sqrt(weighted_numerator) / I_S_max
 
-    # Final calculation of Lacey index
-    M = (S_maximum - S_actual) / (S_maximum - S_random)
 
-    return M
+    return segregation_intensity
 end
 
 
@@ -630,19 +359,96 @@ function calculate_lacey(data_1::Dict,
                          cylinder_radius::Union{<:Real, Nothing}=nothing,
                          cylinder_base_level::Union{<:Real, Nothing}=nothing,
                          cylinder_height::Union{<:Real, Nothing}=nothing,
-                         target_num_cells::Int=200,
-                         packing_threshold::Real=0.05,
-                         output_num_cells::Bool=false,
-                         calculate_partial_volumes::Bool=true,
-                         clamp_0_to_1::Bool=true)::Float64
+                         target_num_cells::Union{<:Real, Nothing}=nothing,
+                         output_num_cells::Union{Bool, Nothing}=false,
+                         calculate_partial_volumes::Union{Bool, Nothing}=true,
+                         clamp_0_to_1::Union{Bool, Nothing}=true,
+                         verbose::Union{Bool, Nothing}=false)::Float64
 
-    # Step 1: Determine mesh divisions
+    # Calculate volume contribution of each type to each cell
+    volume_per_cell_1, volume_per_cell_2 = compute_volume_per_cell(
+        data_1,
+        data_2;
+        cylinder_radius=cylinder_radius,
+        cylinder_base_level=cylinder_base_level,
+        cylinder_height=cylinder_height,
+        target_num_cells=target_num_cells,
+        output_num_cells=output_num_cells,
+        calculate_partial_volumes=calculate_partial_volumes
+    )
+
+    # Calculate concentration of type 1 in each cell (type agnostic)
+    total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
+
+    total_particle_volume = sum(total_particle_volume_per_cell)
+
+    if total_particle_volume == 0
+        println("Total particle volume calculated as zero, returning NaN")
+        return NaN
+    end
+
+    conc_mean = sum(volume_per_cell_1) / total_particle_volume
+
+    # Calculate concentration for occupied cells (0 if unoccupied)
+    concs_1 = ifelse.(
+        total_particle_volume_per_cell .== 0,
+        0.0,
+        volume_per_cell_1 ./ total_particle_volume_per_cell
+    )
+
+    # Step 7: Compute effective particles per cell
+    eff_particles_per_cell = sum(total_particle_volume_per_cell)^2 / sum(total_particle_volume_per_cell.^2)
+
+    # println("lenconcs: $(length(concs_1_valid)), num_valid_cells: $(num_valid_cells)")
+
+    # Step 10: Compute Lacey index
+    # Actual variance of concentrations (weighted by cell occupanacy)
+    S_actual = sum(total_particle_volume_per_cell .* ((concs_1 .- conc_mean).^2)) / total_particle_volume
+
+    # Random variance (binomial distribution assumption)
+    # S_random = conc_mean * (1 - conc_mean) / eff_particles_per_cell
+    S_random = 0
+    
+    # Maximum variance (complete segregation, binomial distribution assumption)
+    S_maximum = conc_mean * (1 - conc_mean)
+
+    if verbose
+        println("Total of assigned cell volumes: $(sum(total_particle_volume_per_cell))")
+        println("Actual total particle volume:   $(sum(volume_per_cell_1) + sum(volume_per_cell_2))")
+        println("S_random: $S_random")
+        println("S_maximum: $S_maximum")
+        println("S_actual: $S_actual")
+    end
+
+    # Final calculation of Lacey index
+    M = (S_maximum - S_actual) / (S_maximum - S_random)
+
+    if clamp_0_to_1
+        M = clamp(M, 0, 1)
+    end
+
+    return M
+end
+
+
+function compute_volume_per_cell(data_1::Dict,
+                                 data_2::Dict
+                                 ;
+                                 cylinder_radius::Union{<:Real, Nothing}=nothing,
+                                 cylinder_base_level::Union{<:Real, Nothing}=nothing,
+                                 cylinder_height::Union{<:Real, Nothing}=nothing,
+                                 target_num_cells::Union{<:Real, Nothing}=nothing,
+                                 output_num_cells::Union{Bool, Nothing}=false,
+                                 calculate_partial_volumes::Union{Bool, Nothing}=true,
+                                 verbose::Union{Bool, Nothing}=false)
+
+    # Determine mesh divisions
     z_divisions = max(1, round(Int, target_num_cells^(1 / 3)))
     num_cells_slice = target_num_cells / z_divisions
-    theta_divisions = 3  # Fixed as per original code
+    theta_divisions = 3  # For the second radial layer
     r_divisions = max(1, round(Int, sqrt(num_cells_slice)))
 
-    # Step 2: Extract particle data from both datasets
+    # Extract particle data from both datasets
     x_data_1, y_data_1, z_data_1, radii_1 = retrieve_coordinates(data_1)
     x_data_2, y_data_2, z_data_2, radii_2 = retrieve_coordinates(data_2)
 
@@ -651,7 +457,11 @@ function calculate_lacey(data_1::Dict,
     r_data_2, theta_data_2 = convert_to_cylindrical(x_data_2, y_data_2)
 
     if isnothing(cylinder_height)
-        throw(ArgumentError("Cylinder height must be provided stoopid"))
+        throw(ArgumentError("Cylinder height must be provided"))
+    end
+
+    if isnothing(target_num_cells)
+        throw(ArgumentError("Target number of cells must be provided"))
     end
 
     estimated_cylinder_radius, estimated_cylinder_base_level = (
@@ -662,17 +472,27 @@ function calculate_lacey(data_1::Dict,
 
     if isnothing(cylinder_radius)
         cylinder_radius = estimated_cylinder_radius
-        # println("No cylinder radius provided, using esimation: $(cylinder_radius)")
+        if verbose println("No cylinder radius provided, using esimation: $(cylinder_radius)") end
     end
 
     if isnothing(cylinder_base_level)
         cylinder_base_level = estimated_cylinder_base_level
-        # println("No cylinder base level provided, using esimation: $(cylinder_base_level)")
+        if verbose println("No cylinder base level provided, using esimation: $(cylinder_base_level)") end
     end
 
     # Step 3: Compute total volumes of both datasets
     particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
     particle_volumes_2 = (4 / 3) * π * (radii_2 .^ 3)
+
+    max_particle_volume = maximum(vcat(particle_volumes_1, particle_volumes_2))
+    
+    radius_inner = cylinder_radius / r_divisions
+    cell_volume = π * radius_inner^2 * cylinder_height / z_divisions
+
+    if calculate_partial_volumes && (cell_volume < max_particle_volume)
+        if verbose println("WARNING: Mesh resolution is too fine; refusing to calculate partial volumes") end
+        calculate_partial_volumes = false
+    end
 
     # Step 4: Create the cylindrical mesh
     divisions = Dict("r" => r_divisions, "theta" => theta_divisions, "z" => z_divisions)
@@ -683,11 +503,9 @@ function calculate_lacey(data_1::Dict,
     cylindrical_mesh = Mesh(:cylindrical, divisions; params=params)
     mesh_boundaries = get_mesh_boundaries(cylindrical_mesh)
     num_cells = get_total_cells(cylindrical_mesh)
-    # num_cells = r_divisions^2 * z_divisions
 
     num_particles_1 = length(r_data_1)
     num_particles_2 = length(r_data_2)
-    num_particles = 
 
     volume_per_cell_1 = zeros(Float64, num_cells)
     volume_per_cell_2 = zeros(Float64, num_cells)
@@ -699,24 +517,22 @@ function calculate_lacey(data_1::Dict,
         println("Axial divisions:        $z_divisions")
     end
 
-    # Step 5: Initialize sparse arrays for packing densities
-    concs_1_sparse = fill(NaN, num_cells)
-    total_particle_volume_per_cell = fill(NaN, num_cells)
+    # Step 5: Initialise zeros array for cell volumes
+    total_particle_volume_per_cell = fill(0.0, num_cells)
 
-    # Compute cell volume using the first cell's boundaries
-    cell_volume = pi * (cylinder_radius / r_divisions)^2 * (cylinder_height / z_divisions)
-
+    # Calculate division size for finding cell index from positions
     dr = cylinder_radius / r_divisions
     dz = cylinder_height / z_divisions
 
     # Step 6: Decide whether to calculate partial volumes or not
     if calculate_partial_volumes
-        volume_per_cell_1 = compute_volume_per_cell(mesh_boundaries, num_cells, num_particles_1, particle_volumes_1, r_data_1, theta_data_1, z_data_1, radii_1, dr, r_divisions, dz, z_divisions, cylinder_base_level)
-        volume_per_cell_2 = compute_volume_per_cell(mesh_boundaries, num_cells, num_particles_2, particle_volumes_2, r_data_2, theta_data_2, z_data_2, radii_2, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        # Calculate partial volume contribution to overlapped cells
+        # Refer to partial volume calculation function
+        volume_per_cell_1 = compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles_1, particle_volumes_1, r_data_1, theta_data_1, z_data_1, radii_1, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        volume_per_cell_2 = compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles_2, particle_volumes_2, r_data_2, theta_data_2, z_data_2, radii_2, dr, r_divisions, dz, z_divisions, cylinder_base_level)
     else
-        # Binning and Aggregation
-
-        # Step 6.3: Assign Particles to Cells for Both Datasets
+        # Not calculating partial volumes
+        # Bin particles based on their centre positions
 
         # Assign cell indices for data_1
         for i in 1:num_particles_1
@@ -733,78 +549,11 @@ function calculate_lacey(data_1::Dict,
         end
     end
 
-    # Step 6.5: Compute Total Packing Density per Cell
-    total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
-    
-    # println("Total of assigned cell volumes: $(sum(total_particle_volume_per_cell))")
-    # println("Actual total particle volume:   $(sum(particle_volumes_1) + sum(particle_volumes_2))")
-
-    conc_mean_valid = sum(volume_per_cell_1) / sum(total_particle_volume_per_cell)
-
-    # Step 6.6: Compute Concentration of Species 1
-    # Initialize with NaN
-    concs_1_sparse = fill(NaN, num_cells)
-
-    # Determine which cells meet the packing density threshold
-    valid_cells_mask = total_particle_volume_per_cell .> packing_threshold .* cell_volume
-
-    # Calculate concentration for valid cells
-    concs_1_sparse[valid_cells_mask] = volume_per_cell_1[valid_cells_mask] ./ total_particle_volume_per_cell[valid_cells_mask]
-    
-    particle_volumes = total_particle_volume_per_cell[valid_cells_mask]
-
-    # Step 6: Filter valid cells
-    concs_1_valid = filter(!isnan, concs_1_sparse)
-    
-    num_valid_cells = length(concs_1_valid)
-
-    # Step 7: Compute effective particles per cell
-    eff_particles_per_cell = sum(particle_volumes)^2 / sum(particle_volumes.^2)
-
-    # Step 8: Compute weighted concentration mean
-    weighted_conc_mean = sum(concs_1_valid .* particle_volumes) / sum(particle_volumes)
-
-    # Step 9: Handle edge cases
-    if num_valid_cells <= 1
-        return NaN
-    end
-
-    # Step 10: Compute Lacey index
-    # Actual variance of concentrations
-    S_actual = sum((concs_1_valid .- weighted_conc_mean).^2) / num_valid_cells
-
-    # Random variance (binomial distribution assumption)
-    S_random = weighted_conc_mean * (1 - weighted_conc_mean) / eff_particles_per_cell
-    
-    # Maximum variance (complete segregation, binomial distribution assumption)
-    S_maximum = weighted_conc_mean * (1 - weighted_conc_mean)
-
-    # Actual variance of concentrations
-    # S_actual = sum((concs_1_valid .- conc_mean_valid).^2) / num_valid_cells
-
-    # # Random variance: Fully mixed -> All cells have a concentration of conc_mean, therefore no variance
-    # S_random = conc_mean_valid * (1 - conc_mean_valid) / num_valid_cells
-
-    # # Maximum variance (complete segregation, binomial distribution assumption)
-    # S_maximum = conc_mean_valid * (1 - conc_mean_valid)
-
-    # println("S_random: $S_random")
-    # println("S_maximum: $S_maximum")
-    # println("S_actual: $S_actual")
-
-
-    # Final calculation of Lacey index
-    M = (S_maximum - S_actual) / (S_maximum - S_random)
-
-    if clamp_0_to_1
-        M = clamp(M, 0, 1)
-    end
-
-    return M
+    return volume_per_cell_1, volume_per_cell_2
 end
 
 
-function compute_volume_per_cell(mesh_boundaries, num_cells, num_particles, particle_volumes, r_data, theta_data, z_data, radii, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles, particle_volumes, r_data, theta_data, z_data, radii, dr, r_divisions, dz, z_divisions, cylinder_base_level)
     # Initialise particle_volume_per_cell
     particle_volume_per_cell = zeros(Float64, num_cells)
     
@@ -965,11 +714,11 @@ function compute_volume_per_cell(mesh_boundaries, num_cells, num_particles, part
                     remainder_indices[5] = [r_idx + relative_r, adjacent_theta_idx + adjacent_relative_theta, z_idx + relative_z]
                 end
             else
-                println("Calculated 2 overlaps but could not match the case")
-                println("Overlap values: $overlap_values")
-                println("Overlaps mask: $overlaps")
-                println("Mesh boundaries: $(mesh_boundaries[cell_idx, :])")
-                println("Coordinates: $(r_data[i]), $(theta_data[i]), $(z_data[i])")
+                # println("Calculated 2 overlaps but could not match the case")
+                # println("Overlap values: $overlap_values")
+                # println("Overlaps mask: $overlaps")
+                # println("Mesh boundaries: $(mesh_boundaries[cell_idx, :])")
+                # println("Coordinates: $(r_data[i]), $(theta_data[i]), $(z_data[i])")
                 # Pretend its inside
                 main_volume = particle_volumes[i]
                 particle_volume_per_cell[cell_idx] += main_volume
@@ -1003,7 +752,12 @@ function compute_volume_per_cell(mesh_boundaries, num_cells, num_particles, part
                 remainder_indices[7] = [r_idx + relative_r, adjacent_theta_idx + adjacent_relative_theta, z_idx + relative_z]
             end
         else
-            println("Calculated an invalid number of overlaps: $num_overlaps")
+            # println("Calculated an invalid number of overlaps: $num_overlaps")
+            # println("This is likely due to a cell somewhere being thinner than a particle")
+            # Assign particle completely inside cell
+            main_volume = particle_volumes[i]
+            particle_volume_per_cell[cell_idx] += main_volume
+            continue
         end
         
 
