@@ -532,23 +532,13 @@ function circle_circle_intersection(R_C, R_c, r)
     r_i = r / 2 + 0.5 * (R_C^2 - R_c^2) / r
     r_ic = r - r_i
 
-    # Handle floating-point precision issues near the boundary
-    ε = 1e-10
-    if abs(r_i - R_C) < R_C * ε
-        r_i = R_C
-    elseif abs(r_i + R_C) < R_C * ε
-        r_i = -R_C
-    end
-
-    if abs(r_ic - R_c) < R_c * ε
-        r_ic = R_c
-    elseif abs(r_ic + R_c) < R_c * ε
-        r_ic = -R_c
-    end
+    # Use clamp for FP precision errors
+    ratio_I1 = clamp(r_ic / R_c, -1, 1)
+    ratio_I2 = clamp(r_i / R_C, -1, 1)
 
     # Calculate the intersection areas for the two circular segments
-    I1 = R_c^2 * (acos(r_ic / R_c) - (r_ic / R_c) * sqrt(1 - (r_ic / R_c)^2))
-    I2 = R_C^2 * (acos(r_i / R_C) - (r_i / R_C) * sqrt(1 - (r_i / R_C)^2))
+    I1 = R_c^2 * (acos(ratio_I1) - (ratio_I1) * sqrt(1 - (ratio_I1)^2))
+    I2 = R_C^2 * (acos(ratio_I2) - (ratio_I2) * sqrt(1 - (ratio_I2)^2))
 
     return I1 + I2
 end
