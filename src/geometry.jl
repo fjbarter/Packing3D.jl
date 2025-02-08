@@ -343,20 +343,20 @@ end
                 c_lim_upper = sqrt(max(0, R^2 - b^2))
             end
         elseif b < 0 && a > 0
-            if c <= -sqrt(R^2 - a^2)
+            if c <= -sqrt(max(0, R^2 - a^2))
                 # Single cap intersection, with centre-chord distance = a
                 return pi * (R - a)^2 * (3 * R - (R - a)) / 3
-            elseif c >= sqrt(R^2 - a^2)
+            elseif c >= sqrt(max(0, R^2 - a^2))
                 # No intersection
                 return 0
             else
                 c_lim_upper = sqrt(max(0, R^2 - a^2))
             end
-        elseif c > 0 && a < -sqrt(R^2 - c^2) && b < -sqrt(R^2 - c^2)
+        elseif c > 0 && a < -sqrt(max(0, R^2 - c^2)) && b < -sqrt(max(0, R^2 - c^2))
             # Single cap intersection, with centre-chord distance = c
             return pi * (R - c)^2 * (3 * R - (R - c)) / 3
         elseif b < 0 && a < 0
-            if c <= -max(sqrt(R^2 - a^2), sqrt(R^2 - b^2))
+            if c <= -max(sqrt(max(0, R^2 - a^2)), sqrt(max(0, R^2 - b^2)))
                 # Sphere missing three single caps, with centre-chord distances
                 # -a, -b, and -c
                 return 4/3 * pi * R^3 - (
