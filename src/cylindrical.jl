@@ -306,6 +306,11 @@ function calculate_segregation_intensity(data_1::Dict,
     # Calculate concentration of type 1 in each cell (type agnostic)
     total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
 
+    problem_cells = findall(total_particle_volume_per_cell .< 0)
+    if !isempty(problem_cells)
+        println("WARNING: Total particle volume in cell calculated as negative at indices: ", problem_cells)
+    end
+
     total_particle_volume = sum(total_particle_volume_per_cell)
 
     if total_particle_volume == 0
