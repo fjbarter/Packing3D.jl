@@ -309,6 +309,7 @@ function calculate_segregation_intensity(data_1::Dict,
     problem_cells = findall(total_particle_volume_per_cell .< 0)
     if !isempty(problem_cells)
         println("WARNING: Total particle volume in cell calculated as negative at indices: ", problem_cells)
+        println("Volume calculated as: ", total_particle_volume_per_cell[problem_cells])
         return NaN
     end
 
