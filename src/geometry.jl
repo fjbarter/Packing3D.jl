@@ -84,7 +84,7 @@ rule for the last interval."
 end
 
 
-function triple_cap_analytical(R_p, a, b, z_min, z_max)
+function triple_cap_analytical(R_p, a, b, z_min, z_max; double_cap::Bool=false)
 
     # Predefined constants (using multiplication rather than division)
     half      = 0.5
@@ -135,8 +135,12 @@ function triple_cap_analytical(R_p, a, b, z_min, z_max)
         return T1 + T2 + T3 + T4 + T5 + T6
     end
 
-    # Return the definite volume as the difference between the antiderivative evaluated at z_max and z_min.
-    return F(z_max) - F(z_min)
+    if double_cap
+        return 2 * F(z_max)
+    else
+        # Return the definite volume as the difference between the antiderivative evaluated at z_max and z_min.
+        return F(z_max) - F(z_min)
+    end
 end
 
 
@@ -255,16 +259,27 @@ end
     0.3974826065772735
     """
     
+    # Split the cases to break the volume into its analytical components
     if a^2 + b^2 <= R^2
         # a and b are contained within sphere, double cap intersection exists
+        c_lim_upper = sqrt(max(0, R^2 - a^2 - b^2))
         if a < 0 && b < 0
-            c_lim_upper = R
+            single_cap_1 = single_cap_intersection(R, -a)
+            single_cap_2 = single_cap_intersection(R, -b)
+            minor_double_cap = double_cap_analytical(R, -a, -b)
+            return (4/3) * pi * R*R*R - single_cap_1 - single_cap_2 + minor_double_cap
         elseif a < 0
-            c_lim_upper = sqrt(max(0, R^2 - b^2))
+            single_cap = single_cap_intersection(R, b)
+            minor_double_cap = double_cap_analytical(R, -a, b)
+            return single_cap - minor_double_cap
         elseif b < 0
-            c_lim_upper = sqrt(max(0, R^2 - a^2))
+            single_cap = single_cap_intersection(R, a)
+            minor_double_cap = double_cap_analytical(R, a, -b)
+            return single_cap - minor_double_cap
+        elseif a == 0.0 && b == 0.0
+            return (1/3) * pi * R*R*R
         else
-            c_lim_upper = sqrt(max(0, R^2 - a^2 - b^2))
+            return double_cap_analytical(R, a, b)
         end
     else
         # Short-circuiting for cases which have analytical solutions
@@ -280,19 +295,55 @@ end
             return pi * (R - a)^2 * (3 * R - (R - a)) / 3
         else
             # Sphere missing two caps, with centre-chord distances -a and -b
-            return 4/3 * pi * R^3 - (
+            return 4/3 * pi * R * R * R - (
                 pi * (R + a)^2 * (3 * R - (R + a)) / 3) - (
                 pi * (R + b)^2 * (3 * R - (R + b)) / 3)
         end
 
     end
 
-    # The double cap intersection is symmetrical, so c_lim_lower is set to 0
-    # and the volume doubled
-    c_lim_lower = 0
-    # return 2*triple_cap_integrator(R, a, b, c_lim_lower, c_lim_upper;
-    #                                num_simpson_sample_points=3)
-    return 2*triple_cap_analytical(R, a, b, c_lim_lower, c_lim_upper)
+end
+
+function double_cap_analytical(R_p, a, b)
+    # Predefined floating-point constants
+    half      = 0.5
+    quarter   = 0.25
+    one_third = 0.33333333333333333333
+    one_sixth = 0.16666666666666666667
+    pi_val    = π
+
+    # Precompute powers of R_p
+    R_p2 = R_p * R_p
+    R_p3 = R_p2 * R_p
+
+    # z_double: the integration limit based on the geometry
+    z_double = sqrt(R_p2 - a*a - b*b)
+    z3 = z_double * z_double * z_double
+
+    # Common subexpressions for the inverse trigonometric functions:
+    sqrt_ab  = sqrt(a*a + b*b)      # for T2b and T4b arcsin arguments
+    sqrt_Rpa = sqrt(R_p2 - a*a)      # for T3b arcsin argument
+    sqrt_Rpb = sqrt(R_p2 - b*b)      # for T5b arcsin argument
+
+    # Calculate each term
+    T1 = quarter * pi_val * (R_p2 * z_double) - one_third * z3
+
+    T2 = one_sixth * z3 -
+          half * (R_p2 * z_double) * asin(a / sqrt_ab) +
+          one_third * R_p3 * atan((a * z_double) / (R_p * b))
+
+    T3 = one_sixth * a * (a*a - 3 * R_p2) * asin(z_double / sqrt_Rpa)
+
+    T4 = one_sixth * z3 -
+          half * (R_p2 * z_double) * asin(b / sqrt_ab) +
+          one_third * R_p3 * atan((b * z_double) / (R_p * a))
+
+    T5 = one_sixth * b * (b*b - 3 * R_p2) * asin(z_double / sqrt_Rpb)
+
+    T6 = one_third * a * b * z_double
+
+    # Combine the terms into the computed volume
+    return 2 * (T1 + T2 + T3 + T4 + T5 + T6)
 end
 
 
@@ -318,74 +369,128 @@ end
         # a and b are contained within sphere
         # This means a triple cap intersection can exist (depending on c)
         if a < 0 && b < 0
-            c_lim_upper = R
+            z_double = sqrt(R^2 - a^2 - b^2)
+            if c >= z_double
+                # Single cap
+                return single_cap_intersection(R, c)
+            elseif c <= -z_double
+                # Double cap minus single cap in c-direction
+                double_cap_volume = double_cap_intersection(R, a, b)
+                single_cap_volume = single_cap_intersection(R, -c)
+                return double_cap_volume - single_cap_volume
+            else
+                # println("Major triple")
+                # Actual major triple cap
+                # Can be found from sphere volume - remainder volume
+                # Remainder volume made up of: single cap in c + double cap in (-a, -c) + double cap in (-b, -c) - minor triple cap in (-a, -b, -c)
+                single_cap = single_cap_intersection(R, c)
+                double_cap_ac = double_cap_intersection(R, -a, c)
+                double_cap_bc = double_cap_intersection(R, -b, c)
+                minor_triple_cap = triple_cap_intersection(R, -a, -b, c)
+                return single_cap - double_cap_ac - double_cap_bc + minor_triple_cap
+            end
         elseif a < 0
-            c_lim_upper = sqrt(max(0, R^2 - b^2))
+            c_max = sqrt(R*R - b*b)
+            if c >= c_max
+                # No intersection
+                return 0.0
+            elseif c <= -c_max
+                # Double cap
+                double_cap_volume = double_cap_intersection(R, a, b)
+                return double_cap_volume
+            else
+                # Triple cap
+                # Can be found from double cap in (a, c) minus minor triple cap in (a, -b, c)
+                double_cap = double_cap_intersection(R, b, c)
+                # Recursive call for minor triple cap
+                minor_triple_cap = triple_cap_intersection(R, -a, b, c)
+                return double_cap - minor_triple_cap
+            end
         elseif b < 0
-            c_lim_upper = sqrt(max(0, R^2 - a^2))
+            c_max = sqrt(R*R - a*a)
+            if c >= c_max
+                # No intersection
+                return 0.0
+            elseif c <= -c_max
+                # Double cap
+                double_cap_volume = double_cap_intersection(R, a, b)
+                return double_cap_volume
+            else
+                # Triple cap
+                # Can be found from double cap in (a, c) minus minor triple cap in (a, -b, c)
+                double_cap = double_cap_intersection(R, a, c)
+                # Recursive call for minor triple cap
+                minor_triple_cap = triple_cap_intersection(R, a, -b, c)
+                return double_cap - minor_triple_cap
+            end
+        elseif a == 0 && b == 0
+            return triple_cap_intersection(R, a + 1e-10, b - 1e-10, c)
         else
-            c_lim_upper = sqrt(max(0, R^2 - a^2 - b^2))
+            if c >= z_double
+                # No intersection
+                return 0.0
+            elseif c <= -z_double
+                # Full double cap intersection
+                return double_cap_analytical(R, a, b)
+            else
+                # c intersects the double cap intersection
+                # -> integrate between c and c_lim_upper
+                return triple_cap_analytical(R, a, b, c, z_double)
+            end
         end
     else
-        # Short-circuiting for cases which have analytical solutions
-        # (perfect accuracy and reduces computational load)
-        if a > 0 && b > 0
-            # No intersection
-            return 0
-        elseif a < 0 && b > 0
-            if c <= -sqrt(R^2 - b^2)
-                # Single cap intersection, with centre-chord distance = b
-                return pi * (R - b)^2 * (3 * R - (R - b)) / 3
-            elseif c >= sqrt(R^2 - b^2)
-                # No intersection
-                return 0
-            else
-                c_lim_upper = sqrt(max(0, R^2 - b^2))
-            end
-        elseif b < 0 && a > 0
-            if c <= -sqrt(max(0, R^2 - a^2))
-                # Single cap intersection, with centre-chord distance = a
-                return pi * (R - a)^2 * (3 * R - (R - a)) / 3
-            elseif c >= sqrt(max(0, R^2 - a^2))
-                # No intersection
-                return 0
-            else
-                c_lim_upper = sqrt(max(0, R^2 - a^2))
-            end
-        elseif c > 0 && a < -sqrt(max(0, R^2 - c^2)) && b < -sqrt(max(0, R^2 - c^2))
-            # Single cap intersection, with centre-chord distance = c
-            return pi * (R - c)^2 * (3 * R - (R - c)) / 3
-        elseif b < 0 && a < 0
-            if c <= -max(sqrt(max(0, R^2 - a^2)), sqrt(max(0, R^2 - b^2)))
+        # Short-circuiting for simpler cases
+        if b < 0 && a < 0
+            c_max = max(sqrt(R^2 - a^2), sqrt(R^2 - b^2))
+            if c <= -c_max
                 # Sphere missing three single caps, with centre-chord distances
                 # -a, -b, and -c
                 return 4/3 * pi * R^3 - (
                     pi * (R + a)^2 * (3 * R - (R + a)) / 3) - (
                     pi * (R + b)^2 * (3 * R - (R + b)) / 3) - (
                     pi * (R + c)^2 * (3 * R - (R + c)) / 3)
+            elseif c >= c_max
+                # Single cap in c
+                return single_cap_intersection(R, c)
             else
-                c_lim_upper = R
+                double_cap_ac = double_cap_intersection(R, -a, c)
+                double_cap_bc = double_cap_intersection(R, -b, c)
+                single_cap = single_cap_intersection(R, c)
+                return single_cap - double_cap_ac - double_cap_bc 
+            end
+        elseif a < 0
+            c_max = sqrt(R*R - b*b)
+            if c <= -c_max
+                # Single cap intersection, with centre-chord distance = b
+                return single_cap_intersection(R, b)
+            elseif c >= c_max
+                # No intersection
+                return 0.0
+            else
+                # Double cap in (b, c)
+                return double_cap_intersection(R, b, c)
+            end
+        elseif b < 0
+            c_max = sqrt(R*R - a*a)
+            if c <= -c_max
+                # Single cap intersection, with centre-chord distance = a
+                return single_cap_intersection(R, a)
+            elseif c >= c_max
+                # No intersection
+                return 0.0
+            else
+                # Double cap in (a, c)
+                return double_cap_intersection(R, a, c)
             end
         else
-            c_lim_upper = R
+            # No intersection
+            return 0.0
         end
     end
 
-    if c >= c_lim_upper
-        # No intersection
-        return 0
-    elseif c <= -c_lim_upper
-        # Symmetrical -> double cap intersection
-        c_lim_lower = -c_lim_upper
-    else
-        # c intersects the double cap intersection
-        # -> integrate between c and c_lim_upper
-        c_lim_lower = c
-    end
-
-    # return triple_cap_integrator(R, a, b, c_lim_lower, c_lim_upper)
-    return triple_cap_analytical(R, a, b, c_lim_lower, c_lim_upper)
-
+    # If case not matched (should never happen)
+    println("Warning: Case not matched in triple cap intersection")
+    return 0.0
 end
 
 

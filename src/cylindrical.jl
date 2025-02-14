@@ -292,7 +292,7 @@ function calculate_segregation_intensity(data_1::Dict,
                                          clamp_0_to_1::Bool=true,
                                          verbose::Bool=false)::Float64
 
-    volume_per_cell_1, volume_per_cell_2 = compute_volume_per_cell(
+    volume_per_cell_1, volume_per_cell_2, real_pv_1, real_pv_2 = compute_volume_per_cell(
         data_1,
         data_2;
         cylinder_radius=cylinder_radius,
@@ -306,6 +306,13 @@ function calculate_segregation_intensity(data_1::Dict,
     # Calculate concentration of type 1 in each cell (type agnostic)
     total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
 
+    total_particle_volume = sum(total_particle_volume_per_cell)
+
+    if verbose
+        println("Total of assigned cell volumes: $(sum(total_particle_volume_per_cell))")
+        println("Actual total particle volume:   $(sum(real_pv_1) + sum(real_pv_2))")
+    end
+
     problem_cells = findall(total_particle_volume_per_cell .< 0)
     if !isempty(problem_cells)
         println("WARNING: Total particle volume in cell calculated as negative at indices: ", problem_cells)
@@ -313,7 +320,6 @@ function calculate_segregation_intensity(data_1::Dict,
         return NaN
     end
 
-    total_particle_volume = sum(total_particle_volume_per_cell)
 
     if total_particle_volume == 0
         println("Total particle volume calculated as zero, returning NaN")
@@ -556,13 +562,16 @@ function compute_volume_per_cell(data_1::Dict,
         end
     end
 
-    return volume_per_cell_1, volume_per_cell_2
+    return volume_per_cell_1, volume_per_cell_2, particle_volumes_1, particle_volumes_2
 end
 
 
 function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles, particle_volumes, r_data, theta_data, z_data, radii, dr, r_divisions, dz, z_divisions, cylinder_base_level)
     # Initialise particle_volume_per_cell
     particle_volume_per_cell = zeros(Float64, num_cells)
+
+    case_counter = zeros(Int, 9)
+    total_case_counter = zeros(Int, 9)
     
     # Loop through all cells and calculate packing densities, then concentration of species 1
     for i in 1:num_particles
@@ -631,6 +640,10 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
             end
         end
 
+        case = 0
+
+
+
         if num_overlaps == 0
             # Particle completely inside cell
             main_volume = particle_volumes[i]
@@ -639,11 +652,13 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
         elseif num_overlaps == 1
             overlap_value = overlap_values[overlaps][1]
             if overlaps_r
-                main_volume = sphere_cylinder_intersection(radii[i], r_data[i], overlap_value; min_boundary=min_boundary)
+                # main_volume = sphere_cylinder_intersection(radii[i], r_data[i], overlap_value; min_boundary=min_boundary)
+                main_volume = single_cap_intersection(radii[i], overlap_value)
                 if isnothing(adjacent_overlap)
                     remainder_volumes = [particle_volumes[i] - main_volume]
                     remainder_indices = [[r_idx + relative_r, adjacent_theta_idx, z_idx]]
                 else
+                    case = 1
                     remainder_volumes = zeros(Float64, 2)
                     remainder_volumes[1] = double_cap_intersection(radii[i], -overlap_value, adjacent_overlap)
                     remainder_volumes[2] = particle_volumes[i] - main_volume - remainder_volumes[1]
@@ -667,6 +682,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
             # Three remainders, need to find their volumes
 
             if overlaps_theta && overlaps_z
+                case = 2
                 remainder_indices = fill(zeros(Int, 3), 3)
                 remainder_volumes = zeros(Float64, 3)
                 # Three remainders
@@ -679,6 +695,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
                 remainder_volumes[3] = particle_volumes[i] - remainder_volumes[1] - remainder_volumes[2] - main_volume
             elseif overlaps_r && overlaps_theta
                 if isnothing(adjacent_overlap)
+                    case = 3
                     remainder_indices = fill(zeros(Int, 2), 2)
                     remainder_volumes = zeros(Float64, 2)
                     remainder_volumes[1] = sphere_cylinder_intersection(radii[i], r_data[i], -overlap_vals[1]; min_boundary=!min_boundary)
@@ -686,6 +703,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
                     remainder_volumes[2] = particle_volumes[i] - main_volume - remainder_volumes[1]
                     remainder_indices[2] = [r_idx, theta_idx + relative_theta, z_idx]
                 else
+                    case = 4
                     remainder_indices = fill(zeros(Int, 3), 3)
                     remainder_volumes = zeros(Float64, 3)
                     remainder_volumes[1] = single_cap_intersection(radii[i], overlap_vals[1]) - main_volume
@@ -698,6 +716,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
                 
             elseif overlaps_r && overlaps_z
                 if isnothing(adjacent_overlap)
+                    case = 5
                     remainder_indices = fill(zeros(Int, 3), 3)
                     remainder_volumes = zeros(Float64, 3)
                     remainder_volumes[1] = sphere_cylinder_intersection(radii[i], r_data[i], overlap_vals[1]) - main_volume
@@ -707,6 +726,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
                     remainder_volumes[3] = particle_volumes[i] - main_volume - remainder_volumes[1] - remainder_volumes[2]
                     remainder_indices[3] = [r_idx + relative_r, adjacent_theta_idx, z_idx + relative_z]
                 else
+                    case = 6
                     remainder_indices = fill(zeros(Int, 5), 5)
                     remainder_volumes = zeros(Float64, 5)
                     remainder_volumes[1] = sphere_cylinder_intersection(radii[i], r_data[i], overlap_vals[1]) - main_volume
@@ -737,6 +757,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
             # Total volume still conserved
             main_volume = particle_volumes[i] / 8
             if isnothing(adjacent_overlap)
+                case = 7
                 remainder_indices = fill(zeros(Int, 5), 5)
                 remainder_volumes = zeros(Float64, 5)
                 remainder_volumes[1:3] .= main_volume
@@ -747,6 +768,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
                 remainder_indices[4] = [r_idx + relative_r, adjacent_theta_idx, z_idx]
                 remainder_indices[5] = [r_idx + relative_r, adjacent_theta_idx, z_idx + relative_z]
             else
+                case = 8
                 remainder_indices = fill(zeros(Int, 7), 7)
                 remainder_volumes = zeros(Float64, 7)
                 remainder_volumes[1:7] .= main_volume
@@ -766,8 +788,16 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
             particle_volume_per_cell[cell_idx] += main_volume
             continue
         end
-        
 
+        problem_remainder_volumes = findall(remainder_volumes .< 0)
+        
+        if !isempty(problem_remainder_volumes)
+            println("WARNING: Total particle volume in cell calculated as negative in cell: ", cell_idx)
+            println("Volume(s) calculated as: ", remainder_volumes)
+            println("$num_overlaps overlaps")
+            case_counter[case + 1] += 1
+        end
+        total_case_counter[case + 1] += 1
         
         particle_volume_per_cell[cell_idx] += main_volume
 
@@ -781,7 +811,8 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
         end
 
     end
-
+    println(case_counter)
+    println(total_case_counter)
     return particle_volume_per_cell
 end
 
