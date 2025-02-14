@@ -426,6 +426,7 @@ end
         elseif a == 0 && b == 0
             return triple_cap_intersection(R, a + 1e-10, b - 1e-10, c)
         else
+            z_double = sqrt(R^2 - a^2 - b^2)
             if c >= z_double
                 # No intersection
                 return 0.0
