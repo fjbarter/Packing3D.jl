@@ -87,6 +87,7 @@ function read_vtk_file(file::String)
                 total_needed = 3 * num_points
                 while length(points_accum) < total_needed
                     if eof(io)
+                        println("Error in file: $file")
                         throw(ArgumentError("Unexpected end of file while reading POINTS data."))
                     end
                     coords_line = strip(readline(io))
@@ -97,6 +98,7 @@ function read_vtk_file(file::String)
                     for c in coords
                         val = tryparse(Float64, c)
                         if val === nothing
+                            println("Error in file: $file")
                             throw(ArgumentError("Invalid numeric value in POINTS section: '$c'"))
                         end
                         push!(points_accum, val)
