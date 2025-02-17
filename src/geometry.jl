@@ -317,13 +317,13 @@ function double_cap_analytical(R_p, a, b)
     R_p3 = R_p2 * R_p
 
     # z_double: the integration limit based on the geometry
-    z_double = sqrt(R_p2 - a*a - b*b)
+    z_double = sqrt(max(0, R_p2 - a*a - b*b))
     z3 = z_double * z_double * z_double
 
     # Common subexpressions for the inverse trigonometric functions:
-    sqrt_ab  = sqrt(a*a + b*b)      # for T2b and T4b arcsin arguments
-    sqrt_Rpa = sqrt(R_p2 - a*a)      # for T3b arcsin argument
-    sqrt_Rpb = sqrt(R_p2 - b*b)      # for T5b arcsin argument
+    sqrt_ab  = sqrt(max(0, a*a + b*b))      # for T2b and T4b arcsin arguments
+    sqrt_Rpa = sqrt(max(0, R_p2 - a*a))      # for T3b arcsin argument
+    sqrt_Rpb = sqrt(max(0, R_p2 - b*b))      # for T5b arcsin argument
 
     # Calculate each term
     T1 = quarter * pi_val * (R_p2 * z_double) - one_third * z3
@@ -369,7 +369,7 @@ end
         # a and b are contained within sphere
         # This means a triple cap intersection can exist (depending on c)
         if a < 0 && b < 0
-            z_double = sqrt(R^2 - a^2 - b^2)
+            z_double = sqrt(max(0, R^2 - a^2 - b^2))
             if c >= z_double
                 # Single cap
                 return single_cap_intersection(R, c)
@@ -390,7 +390,7 @@ end
                 return single_cap - double_cap_ac - double_cap_bc + minor_triple_cap
             end
         elseif a < 0
-            c_max = sqrt(R*R - b*b)
+            c_max = sqrt(max(0, R*R - b*b))
             if c >= c_max
                 # No intersection
                 return 0.0
@@ -407,7 +407,7 @@ end
                 return double_cap - minor_triple_cap
             end
         elseif b < 0
-            c_max = sqrt(R*R - a*a)
+            c_max = sqrt(max(0, R*R - a*a))
             if c >= c_max
                 # No intersection
                 return 0.0
@@ -426,7 +426,7 @@ end
         elseif a == 0 && b == 0
             return triple_cap_intersection(R, a + 1e-10, b - 1e-10, c)
         else
-            z_double = sqrt(R^2 - a^2 - b^2)
+            z_double = sqrt(max(0, R^2 - a^2 - b^2))
             if c >= z_double
                 # No intersection
                 return 0.0
@@ -442,7 +442,7 @@ end
     else
         # Short-circuiting for simpler cases
         if b < 0 && a < 0
-            c_max = max(sqrt(R^2 - a^2), sqrt(R^2 - b^2))
+            c_max = max(sqrt(max(0, R^2 - a^2)), sqrt(max(0, R^2 - b^2)))
             if c <= -c_max
                 # Sphere missing three single caps, with centre-chord distances
                 # -a, -b, and -c
@@ -460,7 +460,7 @@ end
                 return single_cap - double_cap_ac - double_cap_bc 
             end
         elseif a < 0
-            c_max = sqrt(R*R - b*b)
+            c_max = sqrt(max(0, R*R - b*b))
             if c <= -c_max
                 # Single cap intersection, with centre-chord distance = b
                 return single_cap_intersection(R, b)
@@ -472,7 +472,7 @@ end
                 return double_cap_intersection(R, b, c)
             end
         elseif b < 0
-            c_max = sqrt(R*R - a*a)
+            c_max = sqrt(max(0, R*R - a*a))
             if c <= -c_max
                 # Single cap intersection, with centre-chord distance = a
                 return single_cap_intersection(R, a)
