@@ -382,9 +382,11 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
     end
 
     # Determine the values we will use for splitting based on the chosen characteristic.
-    if split_by in (:x, :y, :z)
+    xyz_symbols = [:x, :y, :z]
+    if split_by in xyz_symbols
         # Use the specified Cartesian coordinate.
-        split_values = data[:point_data][split_by]
+        axis_index = findfirst(isequal(split_by), xyz_symbols)
+        split_values = data[:points][:, axis_index]
     elseif split_by in (:r, :theta)
         # Convert Cartesian coordinates to cylindrical.
         x_data, y_data, z_data, _ = retrieve_coordinates(data)
