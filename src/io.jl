@@ -350,45 +350,52 @@ end
 """
     split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothing, value2=nothing, tolerance=1e-6)
 
-Splits the particle data dictionary into two subsets based on a specified characteristic.
+Determines a splitting of the data by returning two lists of point IDs (from `data[:point_data][:id]`)
+that correspond to two subsets of the data. This function is intended to be run once at the beginning
+of a study.
 
 # Parameters
-- `data::Dict{Symbol, Any}`: The dataset containing `:points` and `:point_data`.
-- `split_by::Symbol`: The property used to split the data. Acceptable values are `:x`, `:y`, `:z`, `:r`, `:theta`, `:radius`, or `:type`. For Cartesian and cylindrical coordinates (`:x`, `:y`, `:z`, `:r`, `:theta`), the data are split at the median value. For `:radius` or `:type`, if `value1` and `value2` are provided, points matching these values (within a given tolerance) are separated; otherwise, the median is used.
-- `value1`: The target value for the first subset when splitting by `:radius` or `:type`. Defaults to `nothing`.
-- `value2`: The target value for the second subset when splitting by `:radius` or `:type`. Defaults to `nothing`.
-- `tolerance::Real`: The tolerance used for comparing floating point values. Defaults to `1e-6`.
+- `data::Dict{Symbol, Any}`: A dataset containing `:points` and `:point_data`.
+- `split_by::Symbol`: The characteristic to split on. Acceptable values include:
+  - Cartesian coordinates: `:x`, `:y`, or `:z` (which are taken from the appropriate column of `data[:points]`)
+  - Cylindrical coordinates: `:r` or `:theta` (obtained from `retrieve_coordinates` and `convert_to_cylindrical`)
+  - Particle properties: e.g. `:radius` or `:type` (taken from `data[:point_data]`)
+- `value1` and `value2`: For splitting by particle properties, the target values for each subset.
+  If either is not provided, the split will default to using the median value.
+- `tolerance::Real`: A tolerance factor used when comparing against `value1` and `value2`.
 
 # Returns
-- `(data_1, data_2)`: A tuple of two dictionaries, each containing a subset of the original data. Each dictionary is structured similarly to the input data, containing keys such as `:points` and `:point_data`.
+A tuple `(data_1_ids, data_2_ids)` where each is a vector of point IDs corresponding to the
+two split subsets.
 
 # Raises
-- An error if the input data does not contain the required keys `:points` and `:point_data`.
-- An error if the required field for splitting is not present in `:point_data`.
-- An error if the splitting results in some points not being allocated to either subset.
-
+- An error if the input data does not contain required keys.
+- An error if the splitting results in an incomplete allocation (e.g. one subset gets all or none of the points).
 """
 function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothing, value2=nothing, tolerance=1e-6)
-    # Check that data has the required keys.
+    # Check that data has required keys.
     for key in (:points, :point_data)
         if !haskey(data, key)
             error("Input data must contain key: $key")
         end
     end
+    if !haskey(data[:point_data], :id)
+        error("point_data has no 'id' field")
+    end
 
-    # For necessary splitting options, verify that point_data contains the key.
+    # For splitting by particle properties, ensure the key exists (unless splitting spatially)
     if split_by ∉ (:r, :theta, :x, :y, :z) && !haskey(data[:point_data], split_by)
         error("point_data does not contain the key: $split_by")
     end
 
-    # Determine the values we will use for splitting based on the chosen characteristic.
+    # Determine the splitting values.
     xyz_symbols = [:x, :y, :z]
     if split_by in xyz_symbols
-        # Use the specified Cartesian coordinate.
+        # For Cartesian coordinates, get the corresponding column from :points.
         axis_index = findfirst(isequal(split_by), xyz_symbols)
         split_values = data[:points][:, axis_index]
     elseif split_by in (:r, :theta)
-        # Convert Cartesian coordinates to cylindrical.
+        # Convert Cartesian to cylindrical coordinates.
         x_data, y_data, z_data, _ = retrieve_coordinates(data)
         r_data, theta_data = convert_to_cylindrical(x_data, y_data)
         split_values = (split_by == :r) ? r_data : theta_data
@@ -398,47 +405,72 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
         error("Invalid split_by argument. Use :x, :y, :z, :r, :theta, :radius, or :type.")
     end
 
-    # Decide on splitting strategy:
+    # Decide on splitting strategy.
     if split_by in (:x, :y, :z, :r, :theta)
         # For spatial coordinates, split at the median.
         median_val = median(split_values)
-        data_1_mask = split_values .< median_val
-        data_2_mask = split_values .>= median_val
+        mask1 = split_values .< median_val
+        mask2 = split_values .>= median_val
     elseif split_by in (:radius, :type)
-        # For radius or type, if splitting values are provided, use them.
         if value1 === nothing || value2 === nothing
-            # Fallback to median splitting if target values are not provided.
-            println("Warning: split_by $split_by selected but not enough values provided: ($value1, $value2)")
+            println("Warning: Not enough target values provided for $split_by; using median split.")
             median_val = median(split_values)
-            data_1_mask = split_values .< median_val
-            data_2_mask = split_values .>= median_val
+            mask1 = split_values .< median_val
+            mask2 = split_values .>= median_val
         else
-            # Create masks by comparing (within tolerance) against the given values.
             rel_tolerance = tolerance * abs(value1)
-            data_1_mask = abs.(split_values .- value1) .< rel_tolerance
-            data_2_mask = abs.(split_values .- value2) .< rel_tolerance
+            mask1 = abs.(split_values .- value1) .< rel_tolerance
+            mask2 = abs.(split_values .- value2) .< rel_tolerance
         end
     end
 
-    # Extract points using the boolean masks.
-    data_1 = extract_points(data, data_1_mask)
-    data_2 = extract_points(data, data_2_mask)
-
-    # Verify that the sum of the points in the subsets equals the total number of points in the original data.
+    # Verify that every point is allocated.
     total_points = length(data[:points])
-    n1 = haskey(data_1, :points) ? length(data_1[:points]) : 0
-    n2 = haskey(data_2, :points) ? length(data_2[:points]) : 0
-
+    n1 = count(mask1)
+    n2 = count(mask2)
     if n1 + n2 < total_points
-        error("Incomplete splitting: some points were not allocated to either subset (data_1: $n1, data_2: $n2, total: $total_points).")
+        error("Incomplete splitting: some points were not allocated (data_1: $n1, data_2: $n2, total: $total_points).")
     elseif n1 == total_points
-        error("Incomplete splitting: all data assigned to data_1, $split_by, $value1. $value2")
+        error("Incomplete splitting: all data assigned to subset 1 ($split_by, $value1, $value2)")
     elseif n2 == total_points
-        error("Incomplete splitting: all data assigned to data_2, $split_by, $value1. $value2")
+        error("Incomplete splitting: all data assigned to subset 2 ($split_by, $value1, $value2)")
     end
 
+    # Return only the ID lists, converting them to integers.
+    ids = data[:point_data][:id]
+    data_1_ids = round.(Int, ids[mask1])
+    data_2_ids = round.(Int, ids[mask2])
+    return data_1_ids, data_2_ids
+end
+
+
+"""
+    match_split_data(data::Dict, data_1_ids::Vector{Int}, data_2_ids::Vector{Int})
+
+Given a dataset and two lists of point IDs, this function partitions the data into two subsets.
+This is intended for use on subsequent files (after the initial study split).
+
+# Parameters
+- `data::Dict`: A dataset containing `:points` and `:point_data`.
+- `data_1_ids::Vector{Int}`: The IDs corresponding to the first subset (obtained from `split_data`).
+- `data_2_ids::Vector{Int}`: The IDs corresponding to the second subset.
+
+# Returns
+A tuple `(data_1, data_2)` where each is a subset of `data` (structured as a dictionary) that
+contains only the points with matching IDs.
+"""
+function match_split_data(data::Dict, data_1_ids::Vector{Int}, data_2_ids::Vector{Int})
+    # Get the complete list of IDs from the current dataset.
+    ids = data[:point_data][:id]
+    # Create boolean masks based on membership in the provided ID lists.
+    mask1 = [id in data_1_ids for id in ids]
+    mask2 = [id in data_2_ids for id in ids]
+    # Extract the subsets using the helper function.
+    data_1 = extract_points(data, mask1)
+    data_2 = extract_points(data, mask2)
     return data_1, data_2
 end
+
 
 
 """
