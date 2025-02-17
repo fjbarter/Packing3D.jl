@@ -380,8 +380,7 @@ function calculate_lacey(data_1::Dict,
                          clamp_0_to_1::Union{Bool, Nothing}=true,
                          verbose::Union{Bool, Nothing}=false)::Float64
 
-    # Calculate volume contribution of each type to each cell
-    volume_per_cell_1, volume_per_cell_2 = compute_volume_per_cell(
+    volume_per_cell_1, volume_per_cell_2, real_pv_1, real_pv_2 = compute_volume_per_cell(
         data_1,
         data_2;
         cylinder_radius=cylinder_radius,
@@ -389,13 +388,29 @@ function calculate_lacey(data_1::Dict,
         cylinder_height=cylinder_height,
         target_num_cells=target_num_cells,
         output_num_cells=output_num_cells,
-        calculate_partial_volumes=calculate_partial_volumes
+        calculate_partial_volumes=calculate_partial_volumes,
+        verbose=verbose
     )
-
+    
     # Calculate concentration of type 1 in each cell (type agnostic)
     total_particle_volume_per_cell = (volume_per_cell_1 .+ volume_per_cell_2)
 
     total_particle_volume = sum(total_particle_volume_per_cell)
+
+    min_particle_volume = minimum(vcat(real_pv_1, real_pv_2))
+
+    if verbose
+        println("Total of assigned cell volumes: $(sum(total_particle_volume_per_cell))")
+        println("Actual total particle volume:   $(sum(real_pv_1) + sum(real_pv_2))")
+    end
+
+    problem_cells = findall(total_particle_volume_per_cell .< -min_particle_volume)
+    if !isempty(problem_cells)
+        # println("WARNING: Total particle volume in cell calculated as negative at indices: ", problem_cells)
+        # println("Volume calculated as: ", total_particle_volume_per_cell[problem_cells])
+        return NaN
+    end
+
 
     if total_particle_volume == 0
         println("Total particle volume calculated as zero, returning NaN")
@@ -412,7 +427,7 @@ function calculate_lacey(data_1::Dict,
     )
 
     # Step 7: Compute effective particles per cell
-    eff_particles_per_cell = sum(total_particle_volume_per_cell)^2 / sum(total_particle_volume_per_cell.^2)
+    # eff_particles_per_cell = sum(total_particle_volume_per_cell)^2 / sum(total_particle_volume_per_cell.^2)
 
     # println("lenconcs: $(length(concs_1_valid)), num_valid_cells: $(num_valid_cells)")
 

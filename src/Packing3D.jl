@@ -27,6 +27,8 @@ export Mesh,
        calculate_lacey,
        convert_to_cylindrical,
        read_vtk_file,
+       get_mesh_bounds,
+       split_data,
        retrieve_coordinates,
        extract_points
 

@@ -4,7 +4,12 @@
 
 module IO
 
-export read_vtk_file, retrieve_coordinates, extract_points
+include("geometry.jl")
+
+using Statistics  # for the median function
+using .Geometry: convert_to_cylindrical
+
+export read_vtk_file, retrieve_coordinates, extract_points, get_mesh_bounds, split_data
 
 
 
@@ -264,6 +269,139 @@ function read_vtk_file(file::String)
         :points => points,
         :point_data => point_data
     )
+end
+
+
+"""
+    get_mesh_bounds(mesh_file::Dict)
+
+Computes the axis-aligned bounding box of a mesh based on its point coordinates.
+
+# Arguments
+- `mesh_file::Dict`: Dictionary containing mesh data, as produced by `read_vtk_file`. 
+  It must include the key `:points`, which should be an N×3 matrix of point coordinates.
+
+# Returns
+A vector of 6 numbers in the form `[x_min, x_max, y_min, y_max, z_min, z_max]` representing 
+the minimum and maximum bounds of the mesh along the x, y, and z axes respectively.
+
+# Raises
+- `ErrorException`: If the mesh file cannot be read, if the `:points` key is missing, 
+  or if the points array is not in the expected N×3 format.
+"""
+function get_mesh_bounds(mesh_file::String)
+    # Attempt to read the VTK file, and throw an error if it fails.
+    mesh_data = try
+        read_vtk_file(mesh_file)
+    catch err
+        error("Failed to read mesh file: $(err)")
+    end
+
+    # Ensure that the mesh_data contains the :points key.
+    if !haskey(mesh_data, :points)
+        error("Mesh data does not contain a ':points' field.")
+    end
+
+    # Extract the points array once.
+    points = mesh_data[:points]
+
+    # Validate that the points array is a 2D matrix with 3 columns (nx3).
+    if ndims(points) != 2 || size(points, 2) != 3
+        error("The ':points' array must be an nx3 matrix, but got an array with size $(size(points)).")
+    end
+
+    # Compute the bounds for each coordinate (x, y, z) by iterating over columns.
+    bounds = [val for col in 1:3 for val in (minimum(points[:, col]), maximum(points[:, col]))]
+
+    # bounds is returned as [x_min, x_max, y_min, y_max, z_min, z_max]
+    return bounds
+end
+
+
+"""
+    split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothing, value2=nothing, tolerance=1e-6)
+
+Splits the particle data dictionary into two subsets based on a specified characteristic.
+
+# Parameters
+- `data::Dict{Symbol, Any}`: The dataset containing `:points` and `:point_data`.
+- `split_by::Symbol`: The property used to split the data. Acceptable values are `:x`, `:y`, `:z`, `:r`, `:theta`, `:radius`, or `:type`. For Cartesian and cylindrical coordinates (`:x`, `:y`, `:z`, `:r`, `:theta`), the data are split at the median value. For `:radius` or `:type`, if `value1` and `value2` are provided, points matching these values (within a given tolerance) are separated; otherwise, the median is used.
+- `value1`: The target value for the first subset when splitting by `:radius` or `:type`. Defaults to `nothing`.
+- `value2`: The target value for the second subset when splitting by `:radius` or `:type`. Defaults to `nothing`.
+- `tolerance::Real`: The tolerance used for comparing floating point values. Defaults to `1e-6`.
+
+# Returns
+- `(data_1, data_2)`: A tuple of two dictionaries, each containing a subset of the original data. Each dictionary is structured similarly to the input data, containing keys such as `:points` and `:point_data`.
+
+# Raises
+- An error if the input data does not contain the required keys `:points` and `:point_data`.
+- An error if the required field for splitting is not present in `:point_data`.
+- An error if the splitting results in some points not being allocated to either subset.
+
+"""
+function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothing, value2=nothing, tolerance=1e-6)
+    # Check that data has the required keys.
+    for key in (:points, :point_data)
+        if !haskey(data, key)
+            error("Input data must contain key: $key")
+        end
+    end
+
+    # For most splitting options (except cylindrical), verify that point_data contains the key.
+    if split_by ∉ (:r, :theta) && !haskey(data[:point_data], split_by)
+        error("point_data does not contain the key: $split_by")
+    end
+
+    # Determine the values we will use for splitting based on the chosen characteristic.
+    if split_by in (:x, :y, :z)
+        # Use the specified Cartesian coordinate.
+        split_values = data[:point_data][split_by]
+    elseif split_by in (:r, :theta)
+        # Convert Cartesian coordinates to cylindrical.
+        x_data, y_data, z_data, _ = retrieve_coordinates(data)
+        r_data, theta_data = convert_to_cylindrical(x_data, y_data)
+        split_values = (split_by == :r) ? r_data : theta_data
+    elseif split_by in (:radius, :type)
+        split_values = data[:point_data][split_by]
+    else
+        error("Invalid split_by argument. Use :x, :y, :z, :r, :theta, :radius, or :type.")
+    end
+
+    # Decide on splitting strategy:
+    if split_by in (:x, :y, :z, :r, :theta)
+        # For spatial coordinates, split at the median.
+        median_val = median(split_values)
+        data_1_mask = split_values .< median_val
+        data_2_mask = split_values .>= median_val
+    elseif split_by in (:radius, :type)
+        # For radius or type, if splitting values are provided, use them.
+        if value1 === nothing || value2 === nothing
+            # Fallback to median splitting if target values are not provided.
+            median_val = median(split_values)
+            data_1_mask = split_values .< median_val
+            data_2_mask = split_values .>= median_val
+        else
+            # Create masks by comparing (within tolerance) against the given values.
+            rel_tolerance = tolerance * abs(value1)
+            data_1_mask = abs.(split_values .- value1) .< rel_tolerance
+            data_2_mask = abs.(split_values .- value2) .< rel_tolerance
+        end
+    end
+
+    # Extract points using the boolean masks.
+    data_1 = extract_points(data, data_1_mask)
+    data_2 = extract_points(data, data_2_mask)
+
+    # Verify that the sum of the points in the subsets equals the total number of points in the original data.
+    total_points = length(data[:points])
+    n1 = haskey(data_1, :points) ? length(data_1[:points]) : 0
+    n2 = haskey(data_2, :points) ? length(data_2[:points]) : 0
+
+    if n1 + n2 < total_points
+        error("Incomplete splitting: some points were not allocated to either subset (data_1: $n1, data_2: $n2, total: $total_points).")
+    end
+
+    return data_1, data_2
 end
 
 
