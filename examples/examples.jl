@@ -216,26 +216,7 @@ function example3()
                                                     radii=radii,
                                                     accurate_cylindrical=true)
 
-    # Split data into two types
-    types = data[:point_data][:type]
-
-    type_1 = 1.0
-    type_2 = 3.0
-
-    radius_inner = nothing
-
-    small_radius = 0.0005
-    large_radius = 0.001
-
-    tolerance = 1e-6
-    data_1_mask = abs.(radii .- small_radius) .< tolerance
-    data_2_mask = abs.(radii .- large_radius) .< tolerance
-
-    # data_1_mask = abs.(types .- type_1) .< tolerance
-    # data_2_mask = abs.(types .- type_2) .< tolerance
-
-    data_1 = extract_points(data, data_1_mask)
-    data_2 = extract_points(data, data_2_mask)
+    data_1, data_2 = split_data(data; split_by=:type, value1=1.0, value2=3.0)
 
     num_evals = 100
     target_num_cells_array = LinRange(1, 100000, num_evals)

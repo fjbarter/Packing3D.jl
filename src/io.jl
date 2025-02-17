@@ -406,6 +406,7 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
         # For radius or type, if splitting values are provided, use them.
         if value1 === nothing || value2 === nothing
             # Fallback to median splitting if target values are not provided.
+            println("Warning: split_by $split_by selected but not enough values provided: ($value1, $value2)")
             median_val = median(split_values)
             data_1_mask = split_values .< median_val
             data_2_mask = split_values .>= median_val
@@ -428,6 +429,10 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
 
     if n1 + n2 < total_points
         error("Incomplete splitting: some points were not allocated to either subset (data_1: $n1, data_2: $n2, total: $total_points).")
+    elseif n1 == total_points
+        error("Incomplete splitting: all data assigned to data_1, $split_by, $value1. $value2")
+    elseif n2 == total_points
+        error("Incomplete splitting: all data assigned to data_2, $split_by, $value1. $value2")
     end
 
     return data_1, data_2
