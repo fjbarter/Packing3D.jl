@@ -438,8 +438,8 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
 
     # Return only the ID lists, converting them to integers.
     ids = data[:point_data][:id]
-    data_1_ids = round.(Int, ids[mask1])
-    data_2_ids = round.(Int, ids[mask2])
+    data_1_ids = Set(round.(Int, ids[mask1]))
+    data_2_ids = Set(round.(Int, ids[mask2]))
     return data_1_ids, data_2_ids
 end
 
@@ -459,7 +459,7 @@ This is intended for use on subsequent files (after the initial study split).
 A tuple `(data_1, data_2)` where each is a subset of `data` (structured as a dictionary) that
 contains only the points with matching IDs.
 """
-function match_split_data(data::Dict, data_1_ids::Vector{Int}, data_2_ids::Vector{Int})
+function match_split_data(data::Dict, data_1_ids::Set{Int}, data_2_ids::Set{Int})
     # Get the complete list of IDs from the current dataset.
     ids = data[:point_data][:id]
     # Create boolean masks based on membership in the provided ID lists.
