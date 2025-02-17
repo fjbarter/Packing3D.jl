@@ -29,6 +29,7 @@ export Mesh,
        read_vtk_file,
        get_mesh_bounds,
        split_data,
+       match_split_data,
        retrieve_coordinates,
        extract_points
 

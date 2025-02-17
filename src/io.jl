@@ -8,7 +8,7 @@ include("geometry.jl")
 
 using .Geometry: convert_to_cylindrical
 
-export read_vtk_file, retrieve_coordinates, extract_points, get_mesh_bounds, split_data
+export read_vtk_file, retrieve_coordinates, extract_points, get_mesh_bounds, split_data, match_split_data
 
 
 """
