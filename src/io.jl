@@ -425,7 +425,7 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
     end
 
     # Verify that every point is allocated.
-    total_points = length(data[:points])
+    total_points = length(data[:points][:, 1])
     n1 = count(mask1)
     n2 = count(mask2)
     if n1 + n2 < total_points
