@@ -348,9 +348,9 @@ end
 
 
 """
-    split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothing, value2=nothing, tolerance=1e-6)
+    split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, threshold=nothing, value1=nothing, value2=nothing, tolerance=1e-6)
 
-Determines a splitting of the data by returning two lists of point IDs (from `data[:point_data][:id]`)
+Determines a splitting of the data by returning two sets of point IDs (from `data[:point_data][:id]`)
 that correspond to two subsets of the data. This function is intended to be run once at the beginning
 of a study.
 
@@ -360,19 +360,21 @@ of a study.
   - Cartesian coordinates: `:x`, `:y`, or `:z` (which are taken from the appropriate column of `data[:points]`)
   - Cylindrical coordinates: `:r` or `:theta` (obtained from `retrieve_coordinates` and `convert_to_cylindrical`)
   - Particle properties: e.g. `:radius` or `:type` (taken from `data[:point_data]`)
-- `value1` and `value2`: For splitting by particle properties, the target values for each subset.
-  If either is not provided, the split will default to using the median value.
+- `threshold`: For splitting by particle properties, if provided, points with values below the threshold
+  are assigned to subset 1, and those with values greater than or equal to the threshold are assigned to subset 2.
+- `value1` and `value2`: For splitting by particle properties. If both are provided (and no threshold is given),
+  the function will select points within a tolerance of each target value.
 - `tolerance::Real`: A tolerance factor used when comparing against `value1` and `value2`.
 
 # Returns
-A tuple `(data_1_ids, data_2_ids)` where each is a vector of point IDs corresponding to the
+A tuple `(data_1_ids, data_2_ids)` where each is a set of point IDs (as integers) corresponding to the
 two split subsets.
 
 # Raises
 - An error if the input data does not contain required keys.
 - An error if the splitting results in an incomplete allocation (e.g. one subset gets all or none of the points).
 """
-function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothing, value2=nothing, tolerance=1e-6)
+function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, threshold=nothing, value1=nothing, value2=nothing, tolerance=1e-6)
     # Check that data has required keys.
     for key in (:points, :point_data)
         if !haskey(data, key)
@@ -412,15 +414,20 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
         mask1 = split_values .< median_val
         mask2 = split_values .>= median_val
     elseif split_by in (:radius, :type)
-        if value1 === nothing || value2 === nothing
+        if threshold !== nothing
+            # Use threshold splitting.
+            mask1 = split_values .< threshold
+            mask2 = split_values .>= threshold
+        elseif value1 !== nothing && value2 !== nothing
+            # Use tolerance matching when both target values are provided.
+            rel_tolerance = tolerance * abs(value1)
+            mask1 = abs.(split_values .- value1) .< rel_tolerance
+            mask2 = abs.(split_values .- value2) .< rel_tolerance
+        else
             println("Warning: Not enough target values provided for $split_by; using median split.")
             median_val = median(split_values)
             mask1 = split_values .< median_val
             mask2 = split_values .>= median_val
-        else
-            rel_tolerance = tolerance * abs(value1)
-            mask1 = abs.(split_values .- value1) .< rel_tolerance
-            mask2 = abs.(split_values .- value2) .< rel_tolerance
         end
     end
 
@@ -431,9 +438,9 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
     if n1 + n2 < total_points
         error("Incomplete splitting: some points were not allocated (data_1: $n1, data_2: $n2, total: $total_points).")
     elseif n1 == total_points
-        error("Incomplete splitting: all data assigned to subset 1 ($split_by, $value1, $value2)")
+        error("Incomplete splitting: all data assigned to subset 1 ($split_by, threshold: $threshold, value1: $value1, value2: $value2)")
     elseif n2 == total_points
-        error("Incomplete splitting: all data assigned to subset 2 ($split_by, $value1, $value2)")
+        error("Incomplete splitting: all data assigned to subset 2 ($split_by, threshold: $threshold, value1: $value1, value2: $value2)")
     end
 
     # Return only the ID lists, converting them to integers.
@@ -442,6 +449,7 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
     data_2_ids = Set(round.(Int, ids[mask2]))
     return data_1_ids, data_2_ids
 end
+
 
 
 """
