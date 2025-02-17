@@ -376,8 +376,8 @@ function split_data(data::Dict{Symbol, Any}; split_by::Symbol = :x, value1=nothi
         end
     end
 
-    # For most splitting options (except cylindrical), verify that point_data contains the key.
-    if split_by ∉ (:r, :theta) && !haskey(data[:point_data], split_by)
+    # For necessary splitting options, verify that point_data contains the key.
+    if split_by ∉ (:r, :theta, :x, :y, :z) && !haskey(data[:point_data], split_by)
         error("point_data does not contain the key: $split_by")
     end
 
