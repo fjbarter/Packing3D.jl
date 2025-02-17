@@ -6,12 +6,41 @@ module IO
 
 include("geometry.jl")
 
-using Statistics  # for the median function
 using .Geometry: convert_to_cylindrical
 
 export read_vtk_file, retrieve_coordinates, extract_points, get_mesh_bounds, split_data
 
 
+"""
+    median(v::AbstractVector)
+
+Computes the median of the input vector. For an even number of elements, the median is defined
+as the average of the two middle values.
+
+# Arguments
+- `v::AbstractVector`: A vector of numeric values.
+
+# Returns
+The median of the vector.
+
+# Raises
+- `ArgumentError` if the input vector is empty.
+"""
+function median(v::AbstractVector)
+    n = length(v)
+    if n == 0
+        throw(ArgumentError("Cannot compute median of an empty vector"))
+    end
+    # Copy the vector so that the original data is not mutated.
+    v_sorted = copy(v)
+    sort!(v_sorted)
+    mid = div(n, 2)
+    if isodd(n)
+        return v_sorted[mid+1]
+    else
+        return (v_sorted[mid] + v_sorted[mid+1]) / 2
+    end
+end
 
 
 """
