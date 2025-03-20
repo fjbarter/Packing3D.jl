@@ -4,19 +4,19 @@
 
 module Cylindrical
 
-export compute_packing_cylindrical, calculate_segregation_intensity, calculate_lacey
+export _compute_packing_cylindrical, _calculate_segregation_intensity_cylindrical, _calculate_lacey_cylindrical, _compute_volume_per_cell_cylindrical
 
 # Import functions and structs from relevant modules
-include("io.jl")
-include("geometry.jl")
-include("utils.jl")
-include("cartesian.jl")
-include("mesh.jl")
+# include("io.jl")
+# include("geometry.jl")
+# include("utils.jl")
+# include("cartesian.jl")
+# include("mesh.jl")
 
 # Import specific functions from modules
-using .IO: read_vtk_file, retrieve_coordinates
+using ..IO: read_vtk_file, retrieve_coordinates
 
-using .Geometry: convert_to_cylindrical,
+using ..Geometry: convert_to_cylindrical,
                  calculate_angular_overlap_factor,
                  compute_cell_volume,
                  single_cap_intersection,
@@ -26,7 +26,7 @@ using .Geometry: convert_to_cylindrical,
                  sphere_cylinder_plane_intersection,
                  angular_difference
 
-using .Utils: compute_automatic_boundaries,
+using ..Utils: compute_automatic_boundaries,
               calculate_overlaps,
               calculate_active_overlap_values,
               is_inside_boundaries,
@@ -34,12 +34,13 @@ using .Utils: compute_automatic_boundaries,
               centre_inside_boundaries,
               convert_boundaries_dictionary
 
-using .Cartesian: calculate_particle_volume
+using ..Cartesian: calculate_particle_volume
 
-using .MeshModule: Mesh,
+using ..MeshModule: Mesh,
                    get_mesh_boundaries,
                    get_total_cells,
-                   get_cell_boundaries
+                   get_cell_boundaries,
+                   compute_divisions
 
 """
     compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
@@ -69,7 +70,7 @@ Compute the packing density of particles within a cylindrical region.
 # Raises
 - `ArgumentError`: If neither `file` nor particle data is provided.
 """
-function compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
+function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
                                       boundaries::Union{Vector{<:Real}, Dict{Symbol, <:Real}, Nothing}=nothing,
                                       r_data::Union{Vector{Float64}, Nothing}=nothing,
                                       theta_data::Union{Vector{Float64}, Nothing}=nothing,
@@ -280,26 +281,18 @@ Calculate the segregation intensity for two particle datasets within a cylindric
 # Returns
 - `Float64`: Segregation intensity, a dimensionless value ranging from 0 (perfectly mixed) to 1 (completely segregated). Returns `NaN` if no valid cells are found.
 """
-function calculate_segregation_intensity(data_1::Dict,
+function _calculate_segregation_intensity_cylindrical(data_1::Dict,
                                          data_2::Dict
                                          ;
-                                         cylinder_radius::Union{<:Real, Nothing}=nothing,
-                                         cylinder_base_level::Union{<:Real, Nothing}=nothing,
-                                         cylinder_height::Union{<:Real, Nothing}=nothing,
-                                         target_num_cells::Union{<:Real, Nothing}=nothing,
-                                         output_num_cells::Bool=false,
+                                         mesh::Union{Mesh, Nothing}=nothing,
                                          calculate_partial_volumes::Bool=true,
                                          clamp_0_to_1::Bool=true,
                                          verbose::Bool=false)::Float64
 
-    volume_per_cell_1, volume_per_cell_2, real_pv_1, real_pv_2 = compute_volume_per_cell(
+    volume_per_cell_1, volume_per_cell_2, real_pv_1, real_pv_2 = _compute_volume_per_cell_cylindrical(
         data_1,
         data_2;
-        cylinder_radius=cylinder_radius,
-        cylinder_base_level=cylinder_base_level,
-        cylinder_height=cylinder_height,
-        target_num_cells=target_num_cells,
-        output_num_cells=output_num_cells,
+        mesh=mesh,
         calculate_partial_volumes=calculate_partial_volumes,
         verbose=verbose
     )
@@ -368,26 +361,18 @@ Calculate the Lacey mixing index for two particle datasets in a cylindrical mesh
 # Returns
 - `Float64`: The Lacey mixing index, ranging from 0 (perfect mixing) to 1 (complete segregation).
 """
-function calculate_lacey(data_1::Dict,
+function _calculate_lacey_cylindrical(data_1::Dict,
                          data_2::Dict
                          ;
-                         cylinder_radius::Union{<:Real, Nothing}=nothing,
-                         cylinder_base_level::Union{<:Real, Nothing}=nothing,
-                         cylinder_height::Union{<:Real, Nothing}=nothing,
-                         target_num_cells::Union{<:Real, Nothing}=nothing,
-                         output_num_cells::Union{Bool, Nothing}=false,
+                         mesh::Union{Mesh, Nothing}=nothing,
                          calculate_partial_volumes::Union{Bool, Nothing}=true,
                          clamp_0_to_1::Union{Bool, Nothing}=true,
                          verbose::Union{Bool, Nothing}=false)::Float64
 
-    volume_per_cell_1, volume_per_cell_2, real_pv_1, real_pv_2 = compute_volume_per_cell(
+    volume_per_cell_1, volume_per_cell_2, real_pv_1, real_pv_2 = _compute_volume_per_cell_cylindrical(
         data_1,
         data_2;
-        cylinder_radius=cylinder_radius,
-        cylinder_base_level=cylinder_base_level,
-        cylinder_height=cylinder_height,
-        target_num_cells=target_num_cells,
-        output_num_cells=output_num_cells,
+        mesh=mesh,
         calculate_partial_volumes=calculate_partial_volumes,
         verbose=verbose
     )
@@ -461,22 +446,16 @@ function calculate_lacey(data_1::Dict,
 end
 
 
-function compute_volume_per_cell(data_1::Dict,
+function _compute_volume_per_cell_cylindrical(data_1::Dict,
                                  data_2::Dict
                                  ;
-                                 cylinder_radius::Union{<:Real, Nothing}=nothing,
-                                 cylinder_base_level::Union{<:Real, Nothing}=nothing,
-                                 cylinder_height::Union{<:Real, Nothing}=nothing,
-                                 target_num_cells::Union{<:Real, Nothing}=nothing,
-                                 output_num_cells::Union{Bool, Nothing}=false,
+                                 mesh::Union{Mesh, Nothing}=nothing,
                                  calculate_partial_volumes::Union{Bool, Nothing}=true,
                                  verbose::Union{Bool, Nothing}=false)
 
-    # Determine mesh divisions
-    z_divisions = max(1, round(Int, target_num_cells^(1 / 3)))
-    num_cells_slice = target_num_cells / z_divisions
-    theta_divisions = 3  # For the second radial layer
-    r_divisions = max(1, round(Int, sqrt(num_cells_slice)))
+    # Extract mesh Information
+    params = mesh.params
+    divisions = mesh.divisions
 
     # Extract particle data from both datasets
     x_data_1, y_data_1, z_data_1, radii_1 = retrieve_coordinates(data_1)
@@ -486,35 +465,14 @@ function compute_volume_per_cell(data_1::Dict,
     r_data_1, theta_data_1 = convert_to_cylindrical(x_data_1, y_data_1)
     r_data_2, theta_data_2 = convert_to_cylindrical(x_data_2, y_data_2)
 
-    if isnothing(cylinder_height)
-        throw(ArgumentError("Cylinder height must be provided"))
-    end
-
-    if isnothing(target_num_cells)
-        throw(ArgumentError("Target number of cells must be provided"))
-    end
-
-    estimated_cylinder_radius, estimated_cylinder_base_level = (
-        find_cylinder_parameters(; r_data=vcat(r_data_1, r_data_2),
-                                   z_data=vcat(z_data_1, z_data_2),
-                                   radii=vcat(radii_1, radii_2))
-    )
-
-    if isnothing(cylinder_radius)
-        cylinder_radius = estimated_cylinder_radius
-        if verbose println("No cylinder radius provided, using esimation: $(cylinder_radius)") end
-    end
-
-    if isnothing(cylinder_base_level)
-        cylinder_base_level = estimated_cylinder_base_level
-        if verbose println("No cylinder base level provided, using esimation: $(cylinder_base_level)") end
-    end
-
     # Step 3: Compute total volumes of both datasets
     particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
     particle_volumes_2 = (4 / 3) * π * (radii_2 .^ 3)
 
     max_particle_volume = maximum(vcat(particle_volumes_1, particle_volumes_2))
+
+    cylinder_radius, cylinder_base_level, cylinder_height = params[:cylinder_radius], params[:cylinder_base_level], params[:cylinder_height]
+    r_divisions, z_divisions = divisions[:r], divisions[:z]
     
     radius_inner = cylinder_radius / r_divisions
     cell_volume = π * radius_inner^2 * cylinder_height / z_divisions
@@ -524,28 +482,14 @@ function compute_volume_per_cell(data_1::Dict,
         calculate_partial_volumes = false
     end
 
-    # Step 4: Create the cylindrical mesh
-    divisions = Dict("r" => r_divisions, "theta" => theta_divisions, "z" => z_divisions)
-    params = Dict("cylinder_radius" => cylinder_radius, 
-                  "cylinder_base_level" => cylinder_base_level, 
-                  "cylinder_height" => cylinder_height)
-
-    cylindrical_mesh = Mesh(:cylindrical, divisions; params=params)
-    mesh_boundaries = get_mesh_boundaries(cylindrical_mesh)
-    num_cells = get_total_cells(cylindrical_mesh)
+    mesh_boundaries = get_mesh_boundaries(mesh)
+    num_cells = get_total_cells(mesh)
 
     num_particles_1 = length(r_data_1)
     num_particles_2 = length(r_data_2)
 
     volume_per_cell_1 = zeros(Float64, num_cells)
     volume_per_cell_2 = zeros(Float64, num_cells)
-
-    if output_num_cells
-        println("Target number of cells: $target_num_cells")
-        println("Actual number of cells: $num_cells")
-        println("Radial divisions:       $r_divisions")
-        println("Axial divisions:        $z_divisions")
-    end
 
     # Step 5: Initialise zeros array for cell volumes
     total_particle_volume_per_cell = fill(0.0, num_cells)
@@ -558,23 +502,23 @@ function compute_volume_per_cell(data_1::Dict,
     if calculate_partial_volumes
         # Calculate partial volume contribution to overlapped cells
         # Refer to partial volume calculation function
-        volume_per_cell_1 = compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles_1, particle_volumes_1, r_data_1, theta_data_1, z_data_1, radii_1, dr, r_divisions, dz, z_divisions, cylinder_base_level)
-        volume_per_cell_2 = compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles_2, particle_volumes_2, r_data_2, theta_data_2, z_data_2, radii_2, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        volume_per_cell_1 = compute_partial_volume_per_cell_cylindrical(mesh_boundaries, num_cells, num_particles_1, particle_volumes_1, r_data_1, theta_data_1, z_data_1, radii_1, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        volume_per_cell_2 = compute_partial_volume_per_cell_cylindrical(mesh_boundaries, num_cells, num_particles_2, particle_volumes_2, r_data_2, theta_data_2, z_data_2, radii_2, dr, r_divisions, dz, z_divisions, cylinder_base_level)
     else
         # Not calculating partial volumes
         # Bin particles based on their centre positions
 
         # Assign cell indices for data_1
         for i in 1:num_particles_1
-            r_idx, theta_idx, z_idx = compute_cell_index(r_data_1[i], theta_data_1[i], z_data_1[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
-            cell_idx = find_global_cell_index([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
+            r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data_1[i], theta_data_1[i], z_data_1[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
+            cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
             volume_per_cell_1[cell_idx] += particle_volumes_1[i]
         end
 
         # Assign cell indices for data_2
         for i in 1:num_particles_2
-            r_idx, theta_idx, z_idx = compute_cell_index(r_data_2[i], theta_data_2[i], z_data_2[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
-            cell_idx = find_global_cell_index([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
+            r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data_2[i], theta_data_2[i], z_data_2[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
+            cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
             volume_per_cell_2[cell_idx] += particle_volumes_2[i]
         end
     end
@@ -583,7 +527,7 @@ function compute_volume_per_cell(data_1::Dict,
 end
 
 
-function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particles, particle_volumes, r_data, theta_data, z_data, radii, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+function compute_partial_volume_per_cell_cylindrical(mesh_boundaries, num_cells, num_particles, particle_volumes, r_data, theta_data, z_data, radii, dr, r_divisions, dz, z_divisions, cylinder_base_level)
     # Initialise particle_volume_per_cell
     particle_volume_per_cell = zeros(Float64, num_cells)
 
@@ -592,9 +536,9 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
     
     # Loop through all cells and calculate packing densities, then concentration of species 1
     for i in 1:num_particles
-        r_idx, theta_idx, z_idx = compute_cell_index(r_data[i], theta_data[i], z_data[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
-        cell_idx = find_global_cell_index([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
-        overlap_values, overlaps = particle_overlaps(mesh_boundaries[cell_idx, :], r_data[i], theta_data[i], z_data[i], radii[i])
+        r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data[i], theta_data[i], z_data[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
+        overlap_values, overlaps = particle_overlaps_cylindrical(mesh_boundaries[cell_idx, :], r_data[i], theta_data[i], z_data[i], radii[i])
         num_overlaps = sum(overlaps)
 
         overlaps_r = any(overlaps[1:2])
@@ -826,7 +770,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
             remainder_idx = remainder_indices[j]
             remainder_volume = remainder_volumes[j]
             # println(remainder_idx)
-            remainder_cell_idx = find_global_cell_index(remainder_idx, r_divisions, z_divisions)
+            remainder_cell_idx = find_global_cell_index_cylindrical(remainder_idx, r_divisions, z_divisions)
             particle_volume_per_cell[remainder_cell_idx] += remainder_volume
         end
 
@@ -837,7 +781,7 @@ function compute_partial_volume_per_cell(mesh_boundaries, num_cells, num_particl
 end
 
 
-@inline function particle_overlaps(cell_boundaries, r, theta, z, radius)
+@inline function particle_overlaps_cylindrical(cell_boundaries, r, theta, z, radius)
     r_min, r_max, theta_min, theta_max, z_min, z_max = cell_boundaries
     tolerance = 1e-10
     overlap_values = [
@@ -915,7 +859,7 @@ function find_cylinder_parameters(; r_data=nothing,
 end
 
 
-@inline function compute_cell_index(r, theta, z, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+@inline function compute_cell_index_cylindrical(r, theta, z, dr, r_divisions, dz, z_divisions, cylinder_base_level)
     # Compute z_idx
     z_idx = Int(floor((z - cylinder_base_level) / dz)) + 1
     z_idx = clamp(z_idx, 1, z_divisions)
@@ -946,7 +890,7 @@ end
 end
 
 
-@inline function find_global_cell_index(idx, r_divisions, z_divisions)
+@inline function find_global_cell_index_cylindrical(idx, r_divisions, z_divisions)
     r_idx, theta_idx, z_idx = idx
     # Compute cell_index within the current z layer
     if r_idx == 1

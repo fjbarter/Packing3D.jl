@@ -8,10 +8,11 @@
 
 module Utils
 
-include("geometry.jl")
+# include("geometry.jl")
 
+using ..Geometry: angular_difference
 
-using .Geometry: angular_difference
+export convert_boundaries_dictionary
 
 """
     compute_automatic_boundaries(x_data::AbstractVector{<:Real}, 
