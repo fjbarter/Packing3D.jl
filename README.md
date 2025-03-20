@@ -157,7 +157,7 @@ Computes the Lacey mixing index between two particle datasets, providing a quant
   - Flags to enable partial volume calculations (`calculate_partial_volumes`), verbosity (`verbose`), clamping of the final index (`clamp_0_to_1`), and cell number output (`output_num_cells`).  
 
 **Returns:**  
-A `Float64` representing the Lacey mixing index, where 0 indicates perfect mixing and 1 indicates complete segregation.
+A `Float64` representing the Lacey mixing index, where 1 indicates perfect mixing and 0 indicates complete segregation.
 
 **Example 1**   
 Providing data and `params` for a cylindrical mesh.
