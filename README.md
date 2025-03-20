@@ -7,11 +7,11 @@ Packing3D.jl is a Julia package for calculating the local and bulk packing densi
 The package exposes a clean, high-level interface designed for users (such as Master's students) who may not be familiar with the underlying Julia intricacies. The main functions automatically dispatch to the appropriate Cartesian or cylindrical routines based on the provided `system` parameter.
 
 The key public functions are:
-- `calculate_lacey`
-- `calculate_segregation_intensity`
-- `calculate_packing`
-- `compute_volumes_per_cell`
-- `get_cell_index`
+- [`calculate_packing`](#calculate_packing)
+- [`calculate_segregation_intensity`](#calculate_segregation_intensity)
+- [`calculate_lacey`](#calculate_lacey)
+- [`compute_volumes_per_cell`](#compute_volumes_per_cell)
+- [`get_cell_index`](#get_cell_index)
 
 In addition, the following functions and types are exported for public use:
 - **Mesh Utilities:** `Mesh`, `get_mesh_bounds`, `get_total_cells`, `get_cell_volume`
@@ -52,7 +52,7 @@ Below are descriptions for the key public functions. In these descriptions, posi
 
 ---
 
-### calculate_packing
+### `calculate_packing`
 
 **Description:**  
 Calculates the packing density of particles within a defined region. This function supports both Cartesian and cylindrical systems and can load particle data from a VTK file if a direct data dictionary is not provided. Full cylindrical cells can be specified by either defining a negative `:r_min` or by using full angular boundaries (e.g. `[0, 2*pi]`). If a mesh is not supplied, one is generated automatically based on parameters such as the target number of cells.
@@ -133,7 +133,7 @@ println("Packing Density: ", packing_density)
 ```
 ---
 
-### calculate_lacey
+### `calculate_lacey`
 
 **Description:**  
 Computes the Lacey mixing index between two particle datasets, providing a quantitative measure of mixing. It selects the appropriate internal routine based on the specified `system` and supports optional mesh input. Additional options allow for controlling output verbosity and for clamping the resulting index.
@@ -217,17 +217,17 @@ println("Lacey Mixing Index: ", lacey_index)
 
 ---
 
-### calculate_segregation_intensity
+### `calculate_segregation_intensity`
 
 **Description:**  
-Functionality is identical to [`calculate_lacey`](#calculate_lacey)
+Functionality and arguments are identical to [`calculate_lacey`](#calculate_lacey)
 
 **Returns:**  
 A `Float64` representing the segregation intensity (0 for perfectly mixed, 1 for completely segregated).
 
 ---
 
-### compute_volumes_per_cell
+### `compute_volumes_per_cell`
 
 **Description:**  
 Computes the volume contributions of particles to each cell in the computational mesh. This includes handling particles that partially overlap cell boundaries by calculating their partial volumes. This function is key for accurately determining local packing density. The function is the volume calculation kernel for `calculate_lacey` and `calculate_segregation_intensity`, but it is useful to have public access for custom analysis (e.g. local packing density calculation).
@@ -257,7 +257,7 @@ volumes_per_cell_1, volumes_per_cell_2 = compute_volumes_per_cell(data_1, data_2
 
 ---
 
-### get_cell_index
+### `get_cell_index`
 
 **Description:**  
 Determines the global cell index for a given coordinate vector using the provided mesh. The coordinate vector should match the expected format for the specified system (Cartesian: `[x, y, z]`; Cylindrical: `[r, theta, z]`).
@@ -396,7 +396,7 @@ println("Cell volume in mesh: ", get_cell_volume(mesh))
    Use `convert_to_cylindrical` to transform Cartesian coordinates to cylindrical if needed.
 
 3. **Meshing:**  
-   The `Mesh` struct divides the defined region into cells for localized density calculations.
+   The `Mesh` struct divides the defined region into cells for localised density calculations.
 
 4. **Overlap Calculation:**  
    Analytical methods compute overlapping volumes for particles that span cell boundaries.
