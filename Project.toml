@@ -2,6 +2,3 @@ name = "Packing3D"
 uuid = "5d0ed53d-9f2b-4cc0-9997-af7e4729d96d"
 authors = ["Freddie Barter <fjbarter@outlook.com>"]
 version = "0.1.0"
-
-[deps]
-Test = "61ebf3b4-021a-5061-9804-43f3f933ec2d"
