@@ -17,4 +17,4 @@ jobs:
           version: '1.8'
       - name: Install Dependencies and Run Tests
         run: |
-          julia --project=. -e 'using Pkg; Pkg.instantiate(); import Test; Pkg.add("Test") Pkg.test("Packing3D")'
+          julia --project=. -e 'using Pkg; Pkg.instantiate(); import Test; Pkg.add("Test"); Pkg.test("Packing3D")'
