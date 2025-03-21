@@ -1,6 +1,5 @@
-
-
 workflow = """
+name: CI
 
 on:
   push:
@@ -21,11 +20,10 @@ jobs:
           julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test("Packing3D")'
 """
 
-# Write the workflow file to the appropriate directory:
-import Glob
+import Base.Filesystem: mkpath
 mkpath(".github/workflows")
-open(".github/workflows/ci.yml", "w") do f
-    write(f, workflow)
+open(".github/workflows/ci.yml", "w") do io
+    write(io, workflow)
 end
 
 println("GitHub Actions workflow file created at .github/workflows/ci.yml")
