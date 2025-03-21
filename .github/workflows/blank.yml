@@ -1,0 +1,42 @@
+# One common approach to integrate tests with your GitHub repository is to use GitHub Actions.
+# You can create a workflow file in your repository (at .github/workflows/ci.yml) that
+# automatically runs your test suite (using Pkg.test) on every push or pull request.
+#
+# For example, you can use the following Julia code block to write out a GitHub Actions
+# workflow file that sets up a Julia environment, instantiates your package, and runs its tests.
+#
+# Place this code somewhere (e.g., in a separate script) and run it once to create the file,
+# or simply copy the content into your .github/workflows/ci.yml file.
+#
+# Note: You will need to create the .github/workflows directory if it doesn't exist.
+
+workflow = """
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.8'
+      - name: Install Dependencies and Run Tests
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test("Packing3D"; coverage=true)'
+"""
+
+# Write the workflow file to the appropriate directory:
+import Glob
+mkpath(".github/workflows")
+open(".github/workflows/ci.yml", "w") do f
+    write(f, workflow)
+end
+
+println("GitHub Actions workflow file created at .github/workflows/ci.yml")
