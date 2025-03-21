@@ -1,4 +1,3 @@
-workflow = """
 name: CI
 
 on:
@@ -18,12 +17,3 @@ jobs:
       - name: Install Dependencies and Run Tests
         run: |
           julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test("Packing3D")'
-"""
-
-import Base.Filesystem: mkpath
-mkpath(".github/workflows")
-open(".github/workflows/ci.yml", "w") do io
-    write(io, workflow)
-end
-
-println("GitHub Actions workflow file created at .github/workflows/ci.yml")
