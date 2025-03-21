@@ -1,5 +1,3 @@
-import Pkg
-Pkg.activate(@__DIR__)
 using Test
 using Packing3D
 
