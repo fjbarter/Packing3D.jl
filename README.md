@@ -1,4 +1,7 @@
 # Packing3D.jl #
+
+[![CI](https://github.com/fjbarter/Packing3D.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/fjbarter/Packing3D.jl/actions/workflows/ci.yml)
+
 Packing3D.jl is a Julia package for calculating the local and bulk packing density of spherical particles in 3D. It supports both Cartesian and cylindrical coordinate systems and provides robust meshing capabilities for defining computational regions, along with tools for quantifying mixing and segregation of particle types. **Python version available [here](https://github.com/fjbarter/packing3d).**
 
 ![Example Image1](https://github.com/fjbarter/packing3d/blob/main/source/Before_After_Vibration.png?raw=true) *Cross-sectional packing density distribution of 100,000 particles (~500-600 microns) in a cylindrical container (75 mm diameter), computed over z = [0.005 m, 0.020 m].* 
