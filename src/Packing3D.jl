@@ -6,7 +6,7 @@ module Packing3D
 # Include mesh first
 include("mesh.jl")
 using .MeshModule
-export Mesh, get_mesh_bounds, get_total_cells, get_cell_volume
+export Mesh, get_mesh_boundaries, get_total_cells, get_cell_volume
 
 # Include each module
 include("geometry.jl")
@@ -29,6 +29,7 @@ export calculate_packing,
        compute_volumes_per_cell,
        compute_total_volume_per_cell,
        get_cell_index,
+       get_mesh_bounds,
        convert_to_cylindrical,
        read_vtk_file,
        save_vtk_file,

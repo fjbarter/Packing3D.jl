@@ -161,7 +161,7 @@ function median(v::AbstractVector)
     end
 end
 
-@inline function read_cell_section(io, keyword::String)
+@inline function read_cell_section(io, keyword::String, file)
     # Read the header line, e.g. "VERTICES 6 5"
     header = strip(readline(io))
     parts = split(header)
@@ -178,7 +178,7 @@ end
     # Expect an OFFSETS header line; skip it.
     offsets_header = strip(readline(io))
     if !startswith(offsets_header, "OFFSETS")
-        throw(ArgumentError("Expected OFFSETS block after $keyword header, got: '$offsets_header'"))
+        throw(ArgumentError("Expected OFFSETS block after $keyword header, got: '$offsets_header', file: $file"))
     end
     # Skip any type annotation line (if present)
     candidate = strip(readline(io))
@@ -198,7 +198,7 @@ end
         append!(offsets_tokens, split(line))
     end
     if length(offsets_tokens) != num_offsets
-        throw(ArgumentError("Expected $num_offsets OFFSETS tokens in $keyword section, got $(length(offsets_tokens))."))
+        throw(ArgumentError("Expected $num_offsets OFFSETS tokens in $keyword section, got $(length(offsets_tokens)). file: $file"))
     end
     offsets = parse.(Int, offsets_tokens)
     
@@ -206,7 +206,7 @@ end
     # Expect a CONNECTIVITY header line.
     connectivity_header = strip(readline(io))
     if !startswith(connectivity_header, "CONNECTIVITY")
-        throw(ArgumentError("Expected CONNECTIVITY block after OFFSETS in $keyword section, got: '$connectivity_header'"))
+        throw(ArgumentError("Expected CONNECTIVITY block after OFFSETS in $keyword section, got: '$connectivity_header', file: $file"))
     end
     # Optionally, there may be a type line; check the next line.
     candidate = strip(readline(io))
@@ -318,7 +318,7 @@ function read_vtk_file(file::String)
             for kw in cell_keywords
                 if startswith(line, kw)
                     seek(io, pos)
-                    cell_data = read_cell_section(io, kw)
+                    cell_data = read_cell_section(io, kw, file)
                     cells[Symbol(lowercase(kw))] = cell_data
                     found_section = true
                     break
