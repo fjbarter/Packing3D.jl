@@ -203,8 +203,11 @@ end
     offsets = parse.(Int, offsets_tokens)
     
     # --- CONNECTIVITY block ---
-    # Expect a CONNECTIVITY header line.
+    # Expect a CONNECTIVITY header line. (skipping one possibly blank line)
     connectivity_header = strip(readline(io))
+    if isempty(connectivity_header)
+        connectivity_header = strip(readline(io))
+    end
     if !startswith(connectivity_header, "CONNECTIVITY")
         throw(ArgumentError("Expected CONNECTIVITY block after OFFSETS in $keyword section, got: '$connectivity_header', file: $file"))
     end
