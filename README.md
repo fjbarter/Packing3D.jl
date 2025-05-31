@@ -2,6 +2,8 @@
 
 [![Julia](https://github.com/fjbarter/Packing3D.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/fjbarter/Packing3D.jl/actions/workflows/ci.yml)
 
+Jupyter Notebook available with Binder!
+
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/fjbarter/Packing3D.jl/main?urlpath=%2Fdoc%2Ftree%2Fnotebooks%2Fpacking_and_mixing_demo.ipynb)
 
 Packing3D.jl is a Julia package for calculating the local and bulk packing density of spherical particles in 3D. It supports both Cartesian and cylindrical coordinate systems and provides robust meshing capabilities for defining computational regions, along with tools for quantifying mixing and segregation of particle types. **Python version available [here](https://github.com/fjbarter/packing3d).**
