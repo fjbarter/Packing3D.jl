@@ -171,6 +171,12 @@ function validate_cylindrical_params!(params::Dict)
     if params[:cylinder_height] <= 0
         throw(ArgumentError("'cylinder_height' must be a positive number."))
     end
+    if haskey(params, :centre) && params[:centre] !== nothing
+        c = params[:centre]
+        if !(isa(c, Tuple{<:Real, <:Real}) && length(c) == 2)
+            throw(ArgumentError(":centre must be a 2-tuple of real numbers, got $(c)"))
+        end
+    end
 end
 
 # Function to compute total number of cells

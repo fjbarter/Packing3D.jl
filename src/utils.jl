@@ -383,6 +383,15 @@ function centre_inside_boundaries(; x_data::Union{AbstractVector{<:Real}, Nothin
         # Extract boundaries
         r_min, r_max, theta_min, theta_max, z_min, z_max = boundaries
 
+        # Full cylinder: no r_min constraint
+        if r_min < 0 || isapprox(angular_difference(theta_min, theta_max), 2*pi; atol=1e-8)
+            return (
+                (r_data .<= r_max) .&
+                (z_data .>= z_min) .&
+                (z_data .<= z_max)
+            )
+        end
+
         # Handle angular constraints
         theta_min = mod(theta_min, 2π)
         theta_max = mod(theta_max, 2π)

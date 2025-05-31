@@ -24,6 +24,7 @@ using ..Geometry: compute_cell_volume,
 using ..Utils: compute_automatic_boundaries,
               calculate_overlaps,
               calculate_active_overlap_values,
+              centre_inside_boundaries,
               is_inside_boundaries,
               is_outside_boundaries,
               convert_boundaries_dictionary
@@ -69,7 +70,8 @@ function _compute_packing_cartesian(; file::Union{String, Nothing}=nothing,
                                     y_data::Union{Vector{Float64}, Nothing}=nothing,
                                     z_data::Union{Vector{Float64}, Nothing}=nothing,
                                     radii::Union{Vector{Float64}, Nothing}=nothing,
-                                    cylinder_radius::Union{Float64, Nothing}=nothing)::Float64
+                                    cylinder_radius::Union{Float64, Nothing}=nothing,
+                                    calculate_partial_volumes::Bool = true)::Float64
     # Step 1: Load data from file if not provided
     if x_data === nothing || y_data === nothing || z_data === nothing || radii === nothing
         if file === nothing
@@ -86,6 +88,24 @@ function _compute_packing_cartesian(; file::Union{String, Nothing}=nothing,
         boundaries = convert_boundaries_dictionary(boundaries, :cartesian)
     elseif !isa(boundaries, Vector{Float64})
         throw(ArgumentError("Boundaries must be a `Vector{Float64}`, `Dict{String, Float64}`, or `nothing`."))
+    end
+
+    # Short-circuit for centre-counting
+    if !calculate_partial_volumes
+        within_region_mask = centre_inside_boundaries(;
+            x_data=x_data, y_data=y_data, z_data=z_data,
+            r_data=nothing, theta_data=nothing,
+            boundaries=boundaries,
+            system=:cartesian
+        )
+
+        total_particle_volume = (4/3) * pi * sum((radii[within_region_mask]).^3)
+
+        cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cartesian, cylinder_radius=cylinder_radius)
+
+        packing_density = total_particle_volume / cell_volume
+
+        return packing_density
     end
 
     # Step 3: Calculate overlaps
@@ -107,9 +127,6 @@ function _compute_packing_cartesian(; file::Union{String, Nothing}=nothing,
                                                             overlaps=overlaps, 
                                                             system=:cartesian)
 
-    # Step 5: Pre-compute full particle volumes
-    full_particle_volumes = (4 / 3) * π .* (radii .^ 3)
-
     # Step 6: Get masks for particles fully inside or outside boundaries
     inside_mask = is_inside_boundaries(; x_data=x_data, y_data=y_data, z_data=z_data,
                                          r_data=nothing, theta_data=nothing,
@@ -124,7 +141,7 @@ function _compute_packing_cartesian(; file::Union{String, Nothing}=nothing,
                                            system=:cartesian)
 
     # Step 7: Initialize total particle volume
-    total_particle_volume = sum(full_particle_volumes[inside_mask])
+    total_particle_volume = 4/3 * pi * sum((radii[inside_mask]).^3)
 
     # Step 8: Compute volume for particles neither inside nor outside
     neither_mask = .~(inside_mask .| outside_mask)
@@ -365,13 +382,8 @@ function _compute_volume_per_cell_cartesian(data_1::Dict,
     num_particles_1 = length(x_data_1)
     num_particles_2 = length(x_data_2)
 
-    volume_per_cell_1 = zeros(Float64, num_cells)
-    volume_per_cell_2 = zeros(Float64, num_cells)
 
-    # Step 5: Initialise zeros array for cell volumes
-    total_particle_volume_per_cell = fill(0.0, num_cells)
-
-    # Step 6: Decide whether to calculate partial volumes or not
+    # Step 5: Decide whether to calculate partial volumes or not
     if calculate_partial_volumes
         # Calculate partial volume contribution to overlapped cells
         # Refer to partial volume calculation function
@@ -381,31 +393,23 @@ function _compute_volume_per_cell_cartesian(data_1::Dict,
         # Not calculating partial volumes
         # Bin particles based on their centre positions
 
-        # Assign cell indices for data_1
-        for i in 1:num_particles_1
-            if _is_particle_outside(x_data_1[i], y_data_1[i], z_data_1[i], p)
-                # println("Particle found outside specified boundaries")
-                continue
-            end
-            x_idx, y_idx, z_idx = _compute_cell_index_cartesian(x_data_1[i], y_data_1[i], z_data_1[i], x_min, y_min, z_min, recip_dx, recip_dy, recip_dz)
-            cell_idx = _find_global_cell_index_cartesian(x_idx, y_idx, z_idx, division_vals[1], division_vals[2])
-            volume_per_cell_1[cell_idx] += particle_volumes_1[i]
-        end
+        volume_per_cell_1 = _compute_centres_volume_per_cell_cartesian(num_cells, num_particles_1, particle_volumes_1, x_data_1, y_data_1, z_data_1, x_min, y_min, z_min, recip_dx, recip_dy, recip_dz, division_vals[1], division_vals[2], division_vals[3])
+        volume_per_cell_2 = _compute_centres_volume_per_cell_cartesian(num_cells, num_particles_2, particle_volumes_2, x_data_2, y_data_2, z_data_2, x_min, y_min, z_min, recip_dx, recip_dy, recip_dz, division_vals[1], division_vals[2], division_vals[3])
 
-        # Assign cell indices for data_2
-        for i in 1:num_particles_2
-            if _is_particle_outside(x_data_2[i], y_data_2[i], z_data_2[i], p)
-                # println("Particle found outside specified boundaries")
-                continue
-            end
-            x_idx, y_idx, z_idx = _compute_cell_index_cartesian(x_data_2[i], y_data_2[i], z_data_2[i], x_min, y_min, z_min, recip_dx, recip_dy, recip_dz)
-            cell_idx = _find_global_cell_index_cartesian(x_idx, y_idx, z_idx, division_vals[1], division_vals[2])
-            volume_per_cell_2[cell_idx] += particle_volumes_2[i]
-        end
     end
 
     return volume_per_cell_1, volume_per_cell_2, particle_volumes_1, particle_volumes_2
 end
+
+
+const OFFSETS = (
+        (-1, 0, 0),     # x min
+        (1, 0, 0),      # x max
+        (0, -1, 0),     # y min
+        (0, 1, 0),      # y max
+        (0, 0, -1),     # z min
+        (0, 0, 1)       # z max
+    )
 
 
 function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_volumes, num_cells, num_particles, x_data, y_data, z_data, radii, x_min, y_min, z_min, recip_dx, recip_dy, recip_dz, x_divisions, y_divisions, z_divisions)
@@ -417,11 +421,17 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
     
     # Loop through all cells and calculate packing densities, then concentration of species 1
     for i in 1:num_particles
-        x_idx, y_idx, z_idx = _compute_cell_index_cartesian(x_data[i], y_data[i], z_data[i], x_min, y_min, z_min, recip_dx, recip_dy, recip_dz)
-        base = [x_idx, y_idx, z_idx]
-        cell_idx = _find_global_cell_index_cartesian(x_idx, y_idx, z_idx, x_divisions, y_divisions)
+        base = _compute_cell_index_cartesian(x_data[i], y_data[i], z_data[i], x_min, y_min, z_min, recip_dx, recip_dy, recip_dz)
+        if _is_index_outside_cartesian(base..., x_divisions, y_divisions, z_divisions)
+            continue
+        end
+
+        cell_idx = _find_global_cell_index_cartesian(base..., x_divisions, y_divisions)
         overlap_values, overlaps = _particle_overlaps_cartesian(mesh_boundaries[cell_idx, :], x_data[i], y_data[i], z_data[i], radii[i])
         num_overlaps = sum(overlaps)
+
+        idxs = findall(overlaps)
+        active_offsets = OFFSETS[idxs]
 
         overlaps_x = any(overlaps[1:2])
         overlaps_y = any(overlaps[3:4])
@@ -444,10 +454,10 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
 
         relatives = [relative_x, relative_y, relative_z]
 
-        overlap_dims = [i for i in 1:3 if
-                                 (i == 1 && overlaps_x) ||
-                                 (i == 2 && overlaps_y) ||
-                                 (i == 3 && overlaps_z)]
+        # overlap_dims = [i for i in 1:3 if
+        #                          (i == 1 && overlaps_x) ||
+        #                          (i == 2 && overlaps_y) ||
+        #                          (i == 3 && overlaps_z)]
 
         # case = 0
 
@@ -462,9 +472,10 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
             main_volume = single_cap_intersection(radii[i], overlap_value)
             remainder_volumes = [particle_volumes[i] - main_volume]
 
-            remainder_indices = [[x_idx + relative_x, y_idx + relative_y, z_idx + relative_z]]
+            remainder_indices = [base .+ active_offsets[1]]
         elseif num_overlaps == 2
             overlap_vals = overlap_values[overlaps]
+            remainder_volumes = zeros(Float64, 3)
             
             # Compute the main volume for the cell containing the particle's center
             main_volume = double_cap_intersection(radii[i], overlap_vals[1], overlap_vals[2])
@@ -474,23 +485,25 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
             cap_volume_2 = single_cap_intersection(radii[i], overlap_vals[2])
             
             # Derive remainder volumes ensuring volume conservation
-            remainder_volume_1 = cap_volume_2 - main_volume
-            remainder_volume_2 = cap_volume_1 - main_volume
-            remainder_volume_3 = particle_volumes[i] - (main_volume + remainder_volume_1 + remainder_volume_2)
+            remainder_volumes[1] = cap_volume_2 - main_volume
+            remainder_volumes[2] = cap_volume_1 - main_volume
+            remainder_volumes[3] = particle_volumes[i] - (main_volume + remainder_volumes[1] + remainder_volumes[2])
             
             # Compute the remainder cell indices using relative offsets
-            r1 = copy(base)
-            r1[overlap_dims[1]] += relatives[overlap_dims[1]]
+            # r1 = copy(base)
+            # r1[overlap_dims[1]] += relatives[overlap_dims[1]]
+            r1 = base .+ active_offsets[1]
             
-            r2 = copy(base)
-            r2[overlap_dims[2]] += relatives[overlap_dims[2]]
+            r2 = base .+ active_offsets[2]
             
-            r3 = copy(base)
-            r3[overlap_dims[1]] += relatives[overlap_dims[1]]
-            r3[overlap_dims[2]] += relatives[overlap_dims[2]]
+            r3 = base .+ active_offsets[1] .+ active_offsets[2]
             
-            remainder_indices = [r1, r2, r3]
-            remainder_volumes = [remainder_volume_1, remainder_volume_2, remainder_volume_3]
+            remainder_indices = [
+                base .+ active_offsets[1],
+                base .+ active_offsets[2],
+                base .+ active_offsets[1] .+ active_offsets[2]
+            ]
+
         elseif num_overlaps == 3
             # Instead of computing triple-cap intersections, split the particle volume equally.
             main_volume = particle_volumes[i] / 8
@@ -508,6 +521,8 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
         
             # Compute remainder indices by adding each offset to the base index
             remainder_indices = [base .+ off for off in offsets]
+
+            # remainder_indices = [base .+ ]
         
             # Create a vector of 7 elements, each equal to subvol (1/8 of the particle volume)
             remainder_volumes = fill(main_volume, 7)
@@ -519,26 +534,20 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
             particle_volume_per_cell[cell_idx] += main_volume
             continue
         end
-
-        # problem_remainder_volumes = findall(remainder_volumes .< -1e-11)
-        
-        # if !isempty(problem_remainder_volumes)
-        #     println("WARNING: Total particle volume in cell calculated as negative in cell: ", cell_idx)
-        #     println("Volume(s) calculated as: ", remainder_volumes[problem_remainder_volumes])
-        #     println("$num_overlaps overlaps")
-        #     case_counter[case + 1] += 1
-        # end
-        # total_case_counter[case + 1] += 1
         
         particle_volume_per_cell[cell_idx] += main_volume
+
+        edge_cell = _is_edge_cell_cartesian(base..., x_divisions, y_divisions, z_divisions)
 
         num_remainders = length(remainder_indices)
         for j in 1:num_remainders
             remainder_idx = remainder_indices[j]
             remainder_volume = remainder_volumes[j]
-            if any(remainder_idx .== 0) || any(remainder_idx .> [x_divisions, y_divisions, z_divisions])
-                # Remainder cell outside boundaries
-                continue
+            if edge_cell
+                if _is_index_outside_cartesian(remainder_idx..., x_divisions, y_divisions, z_divisions)
+                    # Remainder cell outside boundaries
+                    continue
+                end
             end
             # println(remainder_idx)
             remainder_global_idx = _find_global_cell_index_cartesian(remainder_idx..., x_divisions, y_divisions)
@@ -548,6 +557,24 @@ function _compute_partial_volume_per_cell_cartesian(mesh_boundaries, particle_vo
     end
     # println(case_counter)
     # println(total_case_counter)
+    return particle_volume_per_cell
+end
+
+
+function _compute_centres_volume_per_cell_cartesian(num_cells, num_particles, particle_volumes, x_data, y_data, z_data, x_min, y_min, z_min, recip_dx, recip_dy, recip_dz, x_divisions, y_divisions, z_divisions)
+    # Initialise particle_volume_per_cell
+    particle_volume_per_cell = zeros(Float64, num_cells)
+    
+    # Loop through all cells and calculate packing densities, then concentration of species 1
+    for i in 1:num_particles
+        x_idx, y_idx, z_idx = _compute_cell_index_cartesian(x_data[i], y_data[i], z_data[i], x_min, y_min, z_min, recip_dx, recip_dy, recip_dz)
+        if _is_index_outside_cartesian(x_idx, y_idx, z_idx, x_divisions, y_divisions, z_divisions)
+            continue
+        end
+        cell_idx = _find_global_cell_index_cartesian(x_idx, y_idx, z_idx, x_divisions, y_divisions)
+        particle_volume_per_cell[cell_idx] += particle_volumes[i]
+    end
+
     return particle_volume_per_cell
 end
 
@@ -593,6 +620,20 @@ end
     return (x < boundaries.x_min) || (x > boundaries.x_max) ||
            (y < boundaries.y_min) || (y > boundaries.y_max) ||
            (z < boundaries.z_min) || (z > boundaries.z_max)
+end
+
+
+@inline function _is_index_outside_cartesian(x_idx, y_idx, z_idx, x_divisions, y_divisions, z_divisions)
+    return (x_idx < 1) || (x_idx > x_divisions) ||
+           (y_idx < 1) || (y_idx > y_divisions) ||
+           (z_idx < 1) || (z_idx > z_divisions)
+end
+
+
+@inline function _is_edge_cell_cartesian(x_idx, y_idx, z_idx, x_divisions, y_divisions, z_divisions)
+    return (x_idx == 1) || (x_idx == x_divisions) ||
+           (y_idx == 1) || (y_idx == y_divisions) ||
+           (z_idx == 1) || (z_idx == z_divisions)
 end
 
 

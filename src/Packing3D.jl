@@ -75,7 +75,7 @@ function calculate_lacey(
         data_1, data_2
         ;
         mesh::Union{Mesh, Nothing}=nothing,
-        system::Symbol=:cartesian,
+        system::Union{Symbol, Nothing}=nothing,
         params::Dict=Dict(),
         target_num_cells::Union{<:Real, Nothing}=1000,
         output_num_cells::Union{Bool, Nothing}=false,
@@ -87,9 +87,13 @@ function calculate_lacey(
     if isnothing(mesh)
         if isnothing(target_num_cells)
             throw(ArgumentError("Target number of cells must be provided"))
+        elseif isnothing(system)
+            throw(ArgumentError("system must be provided if no mesh given. Choose :cartesian or :cylindrical"))
         else
             mesh = Mesh(system; target_num_cells=target_num_cells, params=params)
         end
+    else
+        system = mesh.system
     end
 
     if output_num_cells println("Target # of cells: $target_num_cells, Actual #: $(get_total_cells(mesh)), Divisions: $(mesh.divisions)") end
@@ -234,7 +238,9 @@ function verifies that the required keys are present and converts them to a vect
 function calculate_packing(; file::Union{String, Nothing}=nothing, data::Union{Dict, Nothing}=nothing,
                            boundaries, system::Symbol = :cartesian,
                            cylinder_radius::Union{Float64, Nothing}=nothing,
-                           accurate_cylindrical::Bool = true) :: Float64
+                           accurate_cylindrical::Bool = true,
+                           centre::Tuple{<:Real, <:Real} = (0.0, 0.0),
+                           calculate_partial_volumes::Bool = true) :: Float64
     # If no data is provided, attempt to load it from file.
     if isnothing(data)
         if isnothing(file)
@@ -275,18 +281,20 @@ function calculate_packing(; file::Union{String, Nothing}=nothing, data::Union{D
             y_data = y_data,
             z_data = z_data,
             radii = radii,
-            cylinder_radius = cylinder_radius
+            cylinder_radius = cylinder_radius,
+            calculate_partial_volumes = calculate_partial_volumes
         )
     elseif system == :cylindrical
         # For Cylindrical systems, data must contain :r_data, :theta_data, :z_data, and :radii.
-        r_data, theta_data = convert_to_cylindrical(x_data, y_data)
+        r_data, theta_data = convert_to_cylindrical(x_data, y_data; centre=centre)
         packing_density = _compute_packing_cylindrical(
             boundaries = boundaries_vec,
             r_data = r_data,
             theta_data = theta_data,
             z_data = z_data,
             radii = radii,
-            accurate_cylindrical = accurate_cylindrical
+            accurate_cylindrical = accurate_cylindrical,
+            calculate_partial_volumes = calculate_partial_volumes
         )
     else
         throw(ArgumentError("Invalid system: $system."))

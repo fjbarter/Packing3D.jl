@@ -237,7 +237,7 @@ end
 
 
 
-function read_vtk_file(file::String)
+function read_vtk_file(file::String; verbose::Bool=true)
     # Quick check on file existence
     if !isfile(file)
         throw(ArgumentError("The file '$file' does not exist. Please provide a valid path."))
@@ -306,30 +306,41 @@ function read_vtk_file(file::String)
         end
 
         # --- Step 1.5: Read cell sections ---
-        cell_keywords = ["VERTICES", "LINES", "POLYGONS", "TRIANGLE_STRIPS"]
+        cell_keywords = Set(["VERTICES","LINES","POLYGONS","TRIANGLE_STRIPS"])
         while !eof(io)
-            pos = position(io)
-            line = strip(readline(io))
-            if isempty(line)
-                continue
-            end
-            if startswith(line, "POINT_DATA")
-                seek(io, pos)
-                break
-            end
-            found_section = false
-            for kw in cell_keywords
-                if startswith(line, kw)
+            let pos = position(io)
+                line = strip(readline(io))
+                if isempty(line)
+                    continue
+                end
+
+                # if we’ve hit the start of point_data ⇒ rewind & exit
+                if startswith(line, "POINT_DATA")
                     seek(io, pos)
-                    cell_data = read_cell_section(io, kw, file)
-                    cells[Symbol(lowercase(kw))] = cell_data
-                    found_section = true
                     break
                 end
-            end
-            if !found_section
+
+                # only try to parse if this is truly a cell keyword
+                first_tok = uppercase(first(split(line)))
+                if first_tok ∉ cell_keywords
+                    # not a cell block—rewind and exit
+                    seek(io, pos)
+                    break
+                end
+
+                # it is a cell block: rewind, try to parse it, but on error bail out
                 seek(io, pos)
-                break
+                try
+                    cells[Symbol(lowercase(first_tok))] = read_cell_section(io, first_tok, file)
+                    # continue looping in case there are multiple cell blocks
+                catch err
+                    if verbose @warn "Malformed $first_tok block; skipping topology: $err" end
+                    # record an “empty” cell entry
+                    cells[Symbol(lowercase(first_tok))] = Dict(:offsets=>Int[], :connectivity=>Int[])
+                    # rewind to let POINT_DATA finder see that header (or next token)
+                    seek(io, pos)
+                    break
+                end
             end
         end
 
@@ -444,11 +455,12 @@ function read_vtk_file(file::String)
 
     N = div(length(points_accum), 3)
     points = reshape(points_accum, (3, N))'
-    return Dict(
-        :points => points,
+    out = Dict{Symbol,Any}(
+        :points     => points,
         :point_data => point_data,
-        :cells => cells
+        :cells      => cells           # now guaranteed to exist, even if empty
     )
+    return out
 end
 
 

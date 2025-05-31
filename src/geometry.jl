@@ -423,8 +423,8 @@ end
                 minor_triple_cap = triple_cap_intersection(R, a, -b, c)
                 return double_cap - minor_triple_cap
             end
-        elseif a == 0 && b == 0
-            return triple_cap_intersection(R, a + 1e-10, b - 1e-10, c)
+        elseif (a == 0) && (b == 0)
+            return triple_cap_analytical(R, 0, 0, -R, c)
         else
             z_double = sqrt(max(0, R^2 - a^2 - b^2))
             if c >= z_double
@@ -984,7 +984,7 @@ function calculate_angular_overlap_factor(r_data, radii)
 end
 
 
-function convert_to_cylindrical(x_data, y_data)
+function convert_to_cylindrical(x_data, y_data; centre::Tuple=(0.0, 0.0))
     """
     Convert Cartesian coordinates to cylindrical coordinates with theta in [0, 2π].
 
@@ -997,12 +997,19 @@ function convert_to_cylindrical(x_data, y_data)
             - r_data: Radial distance(s) from the origin.
             - theta_data: Angle(s) in radians from the x-axis, in the range [0, 2π].
     """
+    if centre == (0.0, 0.0)
+        x_translated = x_data
+        y_translated = y_data
+    else
+        x_translated = x_data .- centre[1]
+        y_translated = y_data .- centre[2]
+    end
 
     # Compute radial distance
-    r_data = sqrt.(x_data .^ 2 .+ y_data .^ 2)
+    r_data = sqrt.(x_translated .^ 2 .+ y_translated .^ 2)
 
     # Compute angle using atan2, ensuring the result is in [-π, π]
-    theta_data = atan.(y_data, x_data)
+    theta_data = atan.(y_translated, x_translated)
 
     # Map theta to the range [0, 2π]
     theta_data = mod.(theta_data .+ 2 * pi, 2 * pi)

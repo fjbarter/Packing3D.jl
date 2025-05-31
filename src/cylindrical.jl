@@ -76,7 +76,8 @@ function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
                                       theta_data::Union{Vector{Float64}, Nothing}=nothing,
                                       z_data::Union{Vector{Float64}, Nothing}=nothing,
                                       radii::Union{Vector{Float64}, Nothing}=nothing,
-                                      accurate_cylindrical::Union{Bool, Nothing}=nothing)::Float64
+                                      accurate_cylindrical::Union{Bool, Nothing}=nothing,
+                                      calculate_partial_volumes::Bool = true)::Float64
 
     # Step 1: Load data if necessary
     if r_data === nothing || theta_data === nothing || z_data === nothing || radii === nothing
@@ -98,6 +99,24 @@ function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
                                                    z_data=z_data, system=:cylindrical)
     else
         boundaries = convert_boundaries_dictionary(boundaries, :cylindrical)
+    end
+
+     # Short-circuit for centre-counting
+    if !calculate_partial_volumes
+        within_region_mask = centre_inside_boundaries(;
+            x_data=nothing, y_data=nothing, z_data=z_data,
+            r_data=r_data, theta_data=theta_data,
+            boundaries=boundaries,
+            system=:cylindrical
+        )
+
+        total_particle_volume = (4/3) * pi * sum((radii[within_region_mask]).^3)
+
+        cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cylindrical)
+
+        packing_density = total_particle_volume / cell_volume
+
+        return packing_density
     end
 
     r_min, r_max, theta_min, theta_max, z_min, z_max = boundaries
@@ -126,9 +145,6 @@ function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
                                                             overlaps=overlaps,
                                                             system=:cylindrical)
 
-    # Step 5: Precompute particle volumes
-    full_particle_volumes = (4 / 3) * π .* (radii .^ 3)
-
     # Step 6: Determine masks for particles completely inside or outside boundaries
     inside_mask = is_inside_boundaries(; x_data=nothing, y_data=nothing,
                                          r_data=r_data, theta_data=theta_data, z_data=z_data,
@@ -148,7 +164,7 @@ function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
     end
 
     # Step 7: Initialize total particle volume
-    total_particle_volume = sum(full_particle_volumes[inside_mask])
+    total_particle_volume = (4/3) * pi * sum((radii[inside_mask]).^3)
 
     # Skip fully outside particles and process only "neither" cases
     neither_mask = .~(inside_mask .| outside_mask)
@@ -456,14 +472,19 @@ function _compute_volume_per_cell_cylindrical(data_1::Dict,
     # Extract mesh Information
     params = mesh.params
     divisions = mesh.divisions
+    if haskey(params, :centre)
+        centre = params[:centre]
+    else
+        centre = (0.0, 0.0)
+    end
 
     # Extract particle data from both datasets
     x_data_1, y_data_1, z_data_1, radii_1 = retrieve_coordinates(data_1)
     x_data_2, y_data_2, z_data_2, radii_2 = retrieve_coordinates(data_2)
 
     # Convert Cartesian to cylindrical coordinates
-    r_data_1, theta_data_1 = convert_to_cylindrical(x_data_1, y_data_1)
-    r_data_2, theta_data_2 = convert_to_cylindrical(x_data_2, y_data_2)
+    r_data_1, theta_data_1 = convert_to_cylindrical(x_data_1, y_data_1; centre=centre)
+    r_data_2, theta_data_2 = convert_to_cylindrical(x_data_2, y_data_2; centre=centre)
 
     # Step 3: Compute total volumes of both datasets
     particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
@@ -488,9 +509,6 @@ function _compute_volume_per_cell_cylindrical(data_1::Dict,
     num_particles_1 = length(r_data_1)
     num_particles_2 = length(r_data_2)
 
-    volume_per_cell_1 = zeros(Float64, num_cells)
-    volume_per_cell_2 = zeros(Float64, num_cells)
-
     # Step 5: Initialise zeros array for cell volumes
     total_particle_volume_per_cell = fill(0.0, num_cells)
 
@@ -508,19 +526,9 @@ function _compute_volume_per_cell_cylindrical(data_1::Dict,
         # Not calculating partial volumes
         # Bin particles based on their centre positions
 
-        # Assign cell indices for data_1
-        for i in 1:num_particles_1
-            r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data_1[i], theta_data_1[i], z_data_1[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
-            cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
-            volume_per_cell_1[cell_idx] += particle_volumes_1[i]
-        end
+        volume_per_cell_1 = compute_centres_volume_per_cell_cylindrical(num_cells, num_particles_1, particle_volumes_1, r_data_1, theta_data_1, z_data_1, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        volume_per_cell_2 = compute_centres_volume_per_cell_cylindrical(num_cells, num_particles_2, particle_volumes_2, r_data_2, theta_data_2, z_data_2, dr, r_divisions, dz, z_divisions, cylinder_base_level)
 
-        # Assign cell indices for data_2
-        for i in 1:num_particles_2
-            r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data_2[i], theta_data_2[i], z_data_2[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
-            cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
-            volume_per_cell_2[cell_idx] += particle_volumes_2[i]
-        end
     end
 
     return volume_per_cell_1, volume_per_cell_2, particle_volumes_1, particle_volumes_2
@@ -537,6 +545,9 @@ function compute_partial_volume_per_cell_cylindrical(mesh_boundaries, num_cells,
     # Loop through all cells and calculate packing densities, then concentration of species 1
     for i in 1:num_particles
         r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data[i], theta_data[i], z_data[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        if _is_index_outside_cylindrical(r_idx, z_idx, r_divisions, z_divisions)
+            continue
+        end
         cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
         overlap_values, overlaps = particle_overlaps_cylindrical(mesh_boundaries[cell_idx, :], r_data[i], theta_data[i], z_data[i], radii[i])
         num_overlaps = sum(overlaps)
@@ -781,6 +792,24 @@ function compute_partial_volume_per_cell_cylindrical(mesh_boundaries, num_cells,
 end
 
 
+function compute_centres_volume_per_cell_cylindrical(num_cells, num_particles, particle_volumes, r_data, theta_data, z_data, dr, r_divisions, dz, z_divisions, cylinder_base_level)
+    # Initialise particle_volume_per_cell
+    particle_volume_per_cell = zeros(Float64, num_cells)
+
+    # Loop through all cells and calculate packing densities, then concentration of species 1
+    for i in 1:num_particles
+        r_idx, theta_idx, z_idx = compute_cell_index_cylindrical(r_data[i], theta_data[i], z_data[i], dr, r_divisions, dz, z_divisions, cylinder_base_level)
+        if _is_index_outside_cylindrical(r_idx, z_idx, r_divisions, z_divisions)
+            continue
+        end
+        cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
+        particle_volume_per_cell[cell_idx] += particle_volumes[i]
+    end
+
+    return particle_volume_per_cell
+end
+
+
 @inline function particle_overlaps_cylindrical(cell_boundaries, r, theta, z, radius)
     r_min, r_max, theta_min, theta_max, z_min, z_max = cell_boundaries
     tolerance = 1e-10
@@ -835,7 +864,6 @@ end
 """
 Guesses cylinder radius and base level assuming **at least one** particle is in 
 contact with **bottom** and **edge** of the cylinder.
-# I love my wife #
 """
 function find_cylinder_parameters(; r_data=nothing,
                                     z_data=nothing,
@@ -913,6 +941,11 @@ end
     global_cell_index = (z_idx - 1) * r_divisions^2 + cell_index_in_z
 
     return global_cell_index
+end
+
+@inline function _is_index_outside_cylindrical(r_idx, z_idx, r_divisions, z_divisions)
+    return (r_idx > r_divisions) ||
+           (z_idx < 1) || (z_idx > z_divisions)
 end
 
 
