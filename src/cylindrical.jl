@@ -490,7 +490,7 @@ function _compute_volume_per_cell_cylindrical(data_1::Dict,
     particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
     particle_volumes_2 = (4 / 3) * π * (radii_2 .^ 3)
 
-    max_particle_volume = maximum(vcat(particle_volumes_1, particle_volumes_2))
+    max_particle_diameter = 2 * maximum(vcat(radii_1, radii_2))
 
     cylinder_radius, cylinder_base_level, cylinder_height = params[:cylinder_radius], params[:cylinder_base_level], params[:cylinder_height]
     r_divisions, z_divisions = divisions[:r], divisions[:z]
@@ -498,7 +498,9 @@ function _compute_volume_per_cell_cylindrical(data_1::Dict,
     radius_inner = cylinder_radius / r_divisions
     cell_volume = π * radius_inner^2 * cylinder_height / z_divisions
 
-    if calculate_partial_volumes && (cell_volume < max_particle_volume)
+    cell_too_small = min(cylinder_radius/r_divisions, cylinder_height/z_divisions) < max_particle_diameter
+
+    if calculate_partial_volumes && cell_too_small
         if verbose println("WARNING: Mesh resolution is too fine; refusing to calculate partial volumes") end
         calculate_partial_volumes = false
     end

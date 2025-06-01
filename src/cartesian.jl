@@ -362,7 +362,7 @@ function _compute_volume_per_cell_cartesian(data_1::Dict,
     particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
     particle_volumes_2 = (4 / 3) * π * (radii_2 .^ 3)
 
-    max_particle_volume = maximum(vcat(particle_volumes_1, particle_volumes_2))
+    max_particle_diameter = 2*maximum(vcat(radii_1, radii_2))
 
     # Calculate division sizes and individual cell volume
     division_vals = collect(values(divisions))
@@ -370,8 +370,10 @@ function _compute_volume_per_cell_cartesian(data_1::Dict,
     cell_volume = dx * dy * dz
     recip_dx, recip_dy, recip_dz = 1 ./ [dx, dy, dz]
 
-    if calculate_partial_volumes && (cell_volume < max_particle_volume)
-        if verbose println("WARNING: Mesh resolution is too fine; refusing to calculate partial volumes") end
+    cell_too_small = min(dx, dy, dz) < max_particle_diameter
+
+    if calculate_partial_volumes && cell_too_small
+        println("WARNING: Mesh resolution is too fine; refusing to calculate partial volumes")
         calculate_partial_volumes = false
     end
 
