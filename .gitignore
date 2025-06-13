@@ -20,8 +20,9 @@ docs/site/
 # ignore all pngs from testing
 *.png
 
-# # but not the readme image:
-# !source/converging_densification_segregation_field.png
+# but not the readme images:
+!source/Before_After_Vibration.png
+!source/continuity_comparison.png
 
 test/packing3d_validation.jl
 
