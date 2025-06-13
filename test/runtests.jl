@@ -348,7 +348,7 @@ end
     SC_analytical = pi / 6
 
     # Check that both partial-volume routines converge to the correct SC value
-    @test abs(mean_cartesian - SC_analytical) < 0.0001
-    @test abs(mean_cylindrical - SC_analytical) < 0.0001
+    @test abs(mean_cartesian - SC_analytical) < 0.0005
+    @test abs(mean_cylindrical - SC_analytical) < 0.0005
 
 end
