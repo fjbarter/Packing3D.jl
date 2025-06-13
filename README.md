@@ -8,7 +8,7 @@ Jupyter Notebook available with Binder!
 
 Packing3D.jl is a Julia package for calculating the local and bulk packing density of spherical particles in 3D. It supports both Cartesian and cylindrical coordinate systems and provides robust meshing capabilities for defining computational regions, along with tools for quantifying mixing and segregation of particle types. **Python version available [here](https://github.com/fjbarter/packing3d).**
 
-![Example Image1](https://github.com/fjbarter/packing3d/blob/main/source/Before_After_Vibration.png?raw=true) *Cross-sectional packing density distribution of 100,000 particles (~500-600 microns) in a cylindrical container (75 mm diameter), computed over z = [0.005 m, 0.020 m].* 
+![Example Image1](https://github.com/fjbarter/Packing3D.jl/blob/main/source/Before_After_Vibration.png?raw=true) *Cross-sectional packing density distribution of 100,000 particles (~500-600 microns) in a cylindrical container (75 mm diameter), computed over z = [0.005 m, 0.020 m].* 
 
 **Public API Overview:**  
 The package exposes a clean, high-level interface designed for users (such as Master's students) who may not be familiar with the underlying Julia intricacies. The main functions automatically dispatch to the appropriate Cartesian or cylindrical routines based on the provided `system` parameter.
@@ -26,6 +26,8 @@ In addition, the following functions and types are exported for public use:
 - **Data Partitioning Tools:** `split_data`, `match_split_data`, `extract_points`
 
 > **Note:** Some internal docstrings may be outdated. The documentation below reflects the current intended usage.
+
+![Example Image2](https://github.com/fjbarter/Packing3D.jl/blob/main/source/continuity_comparison.png?raw=true) *Boundary shift test for packing density in Cartesian coordinates. (a) Large-amplitude sweep (0−0.01 m): centre-counting (blue) shows discrete jumps, while the analytic method of **Packing3D** (red) is continuous. (b) Fine-scale sweep (0 − 0.0005 m): the analytic response remains smooth and differentiable* 
 
 ## Table of Contents
 - [Public API Overview](#public-api-overview)
