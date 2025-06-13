@@ -463,9 +463,9 @@ Sample scripts demonstrating usage are provided in the `examples` directory. The
 
 ---
 
-## License
+## Licence
 
-This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
+This project is MIT-licensed. See the [LICENSE](LICENSE) file for details.
 
 ---
 
