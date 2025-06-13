@@ -464,6 +464,631 @@ function read_vtk_file(file::String; verbose::Bool=true)
 end
 
 
+# """
+#     read_vtk_file(file::String; verbose::Bool=true)
+
+# Reads a legacy‐VTK file (ASCII or BINARY) in POLYDATA format and returns a dictionary with keys:
+#   - `:points` (an N×3 Array{Float64,2}),
+#   - `:cells` (a Dict mapping cell‐type Symbols to Dicts with keys `:offsets` and `:connectivity`),
+#   - `:point_data` (a Dict mapping Symbol → Array of data).
+
+# Dispatches to an ASCII reader or a BINARY reader helper based on the third header line.
+# """
+# function read_vtk_file_binaries(file::String; verbose::Bool = true)
+#     if !isfile(file)
+#         throw(ArgumentError("The file '$file' does not exist. Please provide a valid path."))
+#     end
+
+#     # Peek at the format line (third line) to decide ASCII vs. BINARY
+#     open(file, "r") do io
+#         _ = readline(io)                     # e.g. "# vtk DataFile Version 5.1"
+#         _ = readline(io)                     # comment
+#         format_line = strip(readline(io))    # "ASCII" or "BINARY"
+#         if format_line == "ASCII"
+#             return _read_ascii_vtk_file(file; verbose = verbose)
+#         elseif format_line == "BINARY"
+#             return _read_binary_vtk_file(file; verbose = verbose)
+#         else
+#             throw(ArgumentError("Only 'ASCII' or 'BINARY' formats are supported. Found '$format_line'."))
+#         end
+#     end
+# end
+
+
+# # -----------------------------------------------------------------------------
+# # Helper: exact copy of the original ASCII‐only reader, unchanged except that
+# # read_cell_section now allows “OFFSETS vtktypeint64” or similar type tokens.
+# # -----------------------------------------------------------------------------
+
+# @inline function read_cell_section(io, keyword::String, file)
+#     # Read the header line, e.g. "POLYGONS 6 5"
+#     header = strip(readline(io))
+#     parts = split(header)
+#     if length(parts) < 3
+#         throw(ArgumentError("Invalid $keyword header line: '$header'"))
+#     end
+#     num_offsets      = parse(Int, parts[2])
+#     num_connectivity = parse(Int, parts[3])
+
+#     # --- OFFSETS block ---
+#     offsets_header = strip(readline(io))
+#     # Allow lines like "OFFSETS", "OFFSETS vtktypeint64", or "OFFSETS vtkIdType"
+#     if !startswith(offsets_header, "OFFSETS")
+#         throw(ArgumentError("Expected OFFSETS block after $keyword header, got: '$offsets_header', file: $file"))
+#     end
+#     # Skip any type‐annotation line (e.g. "vtktypeint64") if present
+#     candidate = strip(readline(io))
+#     offsets_tokens = String[]
+#     if !isempty(candidate) && !isdigit(candidate[1])
+#         # candidate is a type annotation; skip it
+#         # and read the next nonempty line(s) into offsets_tokens
+#     else
+#         # candidate already contains numeric tokens
+#         append!(offsets_tokens, split(candidate))
+#     end
+#     while length(offsets_tokens) < num_offsets && !eof(io)
+#         line = strip(readline(io))
+#         if isempty(line)
+#             continue
+#         end
+#         append!(offsets_tokens, split(line))
+#     end
+#     if length(offsets_tokens) != num_offsets
+#         throw(ArgumentError("Expected $num_offsets OFFSETS tokens in $keyword section, got $(length(offsets_tokens)). file: $file"))
+#     end
+#     offsets = parse.(Int, offsets_tokens)
+
+#     # --- CONNECTIVITY block ---
+#     conn_header = strip(readline(io))
+#     if isempty(conn_header)
+#         conn_header = strip(readline(io))
+#     end
+#     # Allow "CONNECTIVITY" or "CONNECTIVITY vtktypeint64"
+#     if !startswith(conn_header, "CONNECTIVITY")
+#         throw(ArgumentError("Expected CONNECTIVITY block after OFFSETS in $keyword section, got: '$conn_header', file: $file"))
+#     end
+#     # Skip any type annotation if present
+#     candidate = strip(readline(io))
+#     connectivity_tokens = String[]
+#     if !isempty(candidate) && !isdigit(candidate[1])
+#         # candidate is a type annotation; skip it
+#     else
+#         append!(connectivity_tokens, split(candidate))
+#     end
+#     while length(connectivity_tokens) < num_connectivity && !eof(io)
+#         line = strip(readline(io))
+#         if isempty(line)
+#             continue
+#         end
+#         append!(connectivity_tokens, split(line))
+#     end
+#     if length(connectivity_tokens) != num_connectivity
+#         throw(ArgumentError("Expected $num_connectivity CONNECTIVITY tokens in $keyword section, got $(length(connectivity_tokens))."))
+#     end
+#     connectivity = parse.(Int, connectivity_tokens)
+
+#     return Dict(:offsets => offsets, :connectivity => connectivity)
+# end
+
+
+# function _read_ascii_vtk_file(file::String; verbose::Bool = true)
+#     # This implementation is exactly the original ASCII‐only reader,
+#     # except that read_cell_section now accepts "OFFSETS vtktypeint64", etc.
+
+#     # Prepare accumulators
+#     points_accum = Float64[]
+#     point_data    = Dict{Symbol,Any}()
+#     cells         = Dict{Symbol,Any}()
+#     in_point_data = false
+#     expected_point_data_count = 0
+#     fields_to_read = 0
+
+#     open(file, "r") do io
+#         # --- Header lines ---
+#         _ = readline(io)    # e.g. "# vtk DataFile Version 5.1"
+#         _ = readline(io)    # comment
+#         _ = strip(readline(io))  # "ASCII"
+#         dataset_line = strip(readline(io))   # e.g. "DATASET POLYDATA"
+#         ds_split = split(dataset_line)
+#         if length(ds_split) < 2 || ds_split[1] != "DATASET" || ds_split[2] != "POLYDATA"
+#             throw(ArgumentError("Only 'DATASET POLYDATA' is supported. Found '$dataset_line' instead."))
+#         end
+
+#         # --- Step 1: Read POINTS section ---
+#         num_points = 0
+#         points_parsed = false
+#         while !eof(io) && !points_parsed
+#             line = strip(readline(io))
+#             if isempty(line)
+#                 continue
+#             end
+#             if startswith(line, "POINTS")
+#                 parts = split(line)
+#                 if length(parts) < 3
+#                     throw(ArgumentError("Invalid 'POINTS' line: '$line'"))
+#                 end
+#                 num_points = parse(Int, parts[2])
+#                 total_needed = 3 * num_points
+#                 points_accum = Vector{Float64}(undef, total_needed)
+#                 idx = 1
+#                 while idx <= total_needed
+#                     coords_line = strip(readline(io))
+#                     if isempty(coords_line)
+#                         continue
+#                     end
+#                     for c in split(coords_line)
+#                         val = tryparse(Float64, c)
+#                         if val === nothing
+#                             throw(ArgumentError("Invalid numeric value in POINTS section: '$c'"))
+#                         end
+#                         points_accum[idx] = val
+#                         idx += 1
+#                     end
+#                 end
+#                 points_parsed = true
+#             end
+#         end
+#         if length(points_accum) != 3 * num_points
+#             throw(ArgumentError("Number of coordinate values read does not match '3 * num_points'."))
+#         end
+
+#         # --- Step 1.5: Read cell sections ---
+#         cell_keywords = Set(["VERTICES","LINES","POLYGONS","TRIANGLE_STRIPS"])
+#         while !eof(io)
+#             let pos = position(io)
+#                 line = strip(readline(io))
+#                 if isempty(line)
+#                     continue
+#                 end
+#                 if startswith(line, "POINT_DATA")
+#                     seek(io, pos)
+#                     break
+#                 end
+#                 first_tok = uppercase(first(split(line)))
+#                 if first_tok ∉ cell_keywords
+#                     seek(io, pos)
+#                     break
+#                 end
+#                 seek(io, pos)
+#                 try
+#                     cells[Symbol(lowercase(first_tok))] = read_cell_section(io, first_tok, file)
+#                 catch err
+#                     if verbose
+#                         @warn "Malformed $first_tok block; skipping topology: $err"
+#                     end
+#                     cells[Symbol(lowercase(first_tok))] = Dict(:offsets => Int[], :connectivity => Int[])
+#                     seek(io, pos)
+#                     break
+#                 end
+#             end
+#         end
+
+#         # --- Step 2: Skip lines until "POINT_DATA" ---
+#         while !eof(io)
+#             pos = position(io)
+#             line = strip(readline(io))
+#             if startswith(line, "POINT_DATA")
+#                 seek(io, pos)
+#                 break
+#             end
+#         end
+
+#         # --- Step 3: Read POINT_DATA ---
+#         while !eof(io)
+#             line = strip(readline(io))
+#             if isempty(line)
+#                 continue
+#             end
+#             if startswith(line, "POINT_DATA")
+#                 parts = split(line)
+#                 if length(parts) < 2
+#                     throw(ArgumentError("Malformed 'POINT_DATA' line: '$line'"))
+#                 end
+#                 in_point_data = true
+#                 expected_point_data_count = parse(Int, parts[2])
+#             elseif in_point_data && startswith(line, "SCALARS")
+#                 scalars_split = split(line)
+#                 if length(scalars_split) < 3
+#                     throw(ArgumentError("Invalid SCALARS definition: '$line'"))
+#                 end
+#                 scalar_name = Symbol(scalars_split[2])
+#                 num_components = 1
+#                 if length(scalars_split) >= 4
+#                     val = tryparse(Int, scalars_split[4])
+#                     if val !== nothing
+#                         num_components = val
+#                     end
+#                 end
+#                 _ = strip(readline(io))  # "LOOKUP_TABLE default"
+#                 total_vals_needed = expected_point_data_count * num_components
+#                 data_accum = Vector{Float64}(undef, total_vals_needed)
+#                 i = 1
+#                 while i <= total_vals_needed && !eof(io)
+#                     vals_line = strip(readline(io))
+#                     if isempty(vals_line)
+#                         continue
+#                     end
+#                     for v in split(vals_line)
+#                         data_accum[i] = parse(Float64, v)
+#                         i += 1
+#                     end
+#                 end
+#                 if length(data_accum) != total_vals_needed
+#                     throw(ArgumentError("Did not read the expected number of scalar values for '$scalar_name'."))
+#                 end
+#                 if num_components > 1
+#                     point_data[scalar_name] = reshape(data_accum, (num_components, expected_point_data_count))'
+#                 else
+#                     point_data[scalar_name] = data_accum
+#                 end
+
+#             elseif in_point_data && startswith(line, "FIELD")
+#                 parts = split(line)
+#                 if length(parts) < 3
+#                     throw(ArgumentError("Invalid FIELD line: '$line'"))
+#                 end
+#                 fields_to_read = parse(Int, parts[3])
+#                 while fields_to_read > 0 && !eof(io)
+#                     field_line = strip(readline(io))
+#                     if isempty(field_line)
+#                         continue
+#                     end
+#                     field_parts = split(field_line)
+#                     if length(field_parts) < 4
+#                         throw(ArgumentError("Invalid field definition line: '$field_line'"))
+#                     end
+#                     current_field_name      = Symbol(field_parts[1])
+#                     current_field_components = parse(Int, field_parts[2])
+#                     current_field_points    = parse(Int, field_parts[3])
+#                     total_field_vals = current_field_components * current_field_points
+#                     collected_vals = Float64[]
+#                     while length(collected_vals) < total_field_vals && !eof(io)
+#                         val_line = strip(readline(io))
+#                         if isempty(val_line)
+#                             continue
+#                         end
+#                         for val_str in split(val_line)
+#                             parsed_val = tryparse(Float64, val_str)
+#                             if parsed_val === nothing
+#                                 throw(ArgumentError("Invalid numeric value in FIELD '$current_field_name': '$val_str'"))
+#                             end
+#                             push!(collected_vals, parsed_val)
+#                         end
+#                     end
+#                     if length(collected_vals) != total_field_vals
+#                         throw(ArgumentError("Did not read expected number of values for FIELD '$current_field_name'."))
+#                     end
+#                     if current_field_components > 1
+#                         point_data[current_field_name] = reshape(collected_vals, (current_field_components, current_field_points))'
+#                     else
+#                         point_data[current_field_name] = collected_vals
+#                     end
+#                     fields_to_read -= 1
+#                 end
+
+#             else
+#                 continue
+#             end
+#         end
+#     end
+
+#     # Reshape points
+#     N = div(length(points_accum), 3)
+#     points = reshape(points_accum, (3, N))'
+#     return Dict{Symbol,Any}(
+#         :points     => points,
+#         :point_data => point_data,
+#         :cells      => cells
+#     )
+# end
+
+
+# # -----------------------------------------------------------------------------
+# # Helper: new BINARY‐only reader.  Shares logic for dataset‐/POINTS/etc. but
+# # reads all numeric arrays as big‐endian binary.  Does not call read_cell_section.
+# # -----------------------------------------------------------------------------
+
+# function _read_binary_vtk_file(file::String; verbose::Bool = true)
+#     # Prepare accumulators
+#     points_accum = Float64[]
+#     point_data    = Dict{Symbol,Any}()
+#     cells         = Dict{Symbol,Any}()
+#     in_point_data = false
+#     expected_point_data_count = 0
+#     fields_to_read = 0
+
+#     open(file, "r") do io
+#         # --- HEADER LINES ---
+#         _ = readline(io)                         # "# vtk DataFile Version 5.1"
+#         _ = readline(io)                         # comment
+#         _ = strip(readline(io))                  # "BINARY"
+#         dataset_line = strip(readline(io))       # "DATASET POLYDATA"
+#         ds_split = split(dataset_line)
+#         if length(ds_split) < 2 || ds_split[1] != "DATASET" || ds_split[2] != "POLYDATA"
+#             throw(ArgumentError("Only 'DATASET POLYDATA' is supported. Found '$dataset_line' instead."))
+#         end
+
+#         # --- Step 1: Read POINTS section in binary ---
+#         num_points = 0
+#         points_parsed = false
+#         while !eof(io) && !points_parsed
+#             line = strip(readline(io))
+#             if isempty(line)
+#                 continue
+#             end
+#             if startswith(line, "POINTS")
+#                 # Example: "POINTS 100 float" or "POINTS 100 double"
+#                 parts = split(line)
+#                 if length(parts) < 3
+#                     throw(ArgumentError("Invalid 'POINTS' line: '$line'"))
+#                 end
+#                 num_points = parse(Int, parts[2])
+#                 dtype_str  = lowercase(parts[3])       # "float" or "double"
+#                 total_vals = 3 * num_points
+
+#                 if dtype_str == "float"
+#                     # Read big‐endian Float32
+#                     raw_u = Vector{UInt32}(undef, total_vals)
+#                     read!(io, raw_u)
+#                     points_accum = Vector{Float64}(undef, total_vals)
+#                     for i in 1:total_vals
+#                         be_u32 = bswap(raw_u[i])
+#                         f32    = reinterpret(Float32, be_u32)
+#                         points_accum[i] = Float64(f32)
+#                     end
+#                 elseif dtype_str == "double"
+#                     # Read big‐endian Float64
+#                     raw_u = Vector{UInt64}(undef, total_vals)
+#                     read!(io, raw_u)
+#                     points_accum = Vector{Float64}(undef, total_vals)
+#                     for i in 1:total_vals
+#                         be_u64 = bswap(raw_u[i])
+#                         f64    = reinterpret(Float64, be_u64)
+#                         points_accum[i] = f64
+#                     end
+#                 else
+#                     throw(ArgumentError("Unsupported POINTS data type '$dtype_str'. Expected 'float' or 'double'."))
+#                 end
+#                 points_parsed = true
+#             end
+#         end
+#         if length(points_accum) != 3 * num_points
+#             throw(ArgumentError("Number of coordinate values read does not match '3 * num_points'."))
+#         end
+
+#         # --- Step 1.5: Read cell sections in binary ---
+#         cell_keywords = Set(["VERTICES","LINES","POLYGONS","TRIANGLE_STRIPS"])
+#         while !eof(io)
+#             let pos = position(io)
+#                 line = strip(readline(io))
+#                 if isempty(line)
+#                     continue
+#                 end
+#                 if startswith(line, "POINT_DATA")
+#                     seek(io, pos)
+#                     break
+#                 end
+#                 first_tok = uppercase(first(split(line)))
+#                 if first_tok ∉ cell_keywords
+#                     seek(io, pos)
+#                     break
+#                 end
+
+#                 # It is a cell block
+#                 # Read header: e.g. "POLYGONS M P"
+#                 header = strip(readline(io))
+#                 parts = split(header)
+#                 if length(parts) < 3
+#                     throw(ArgumentError("Invalid $first_tok header line: '$header'"))
+#                 end
+#                 num_offsets      = parse(Int, parts[2])
+#                 num_connectivity = parse(Int, parts[3])
+
+#                 # OFFSETS (possibly with type token)
+#                 offsets_header = strip(readline(io))
+#                 if !startswith(offsets_header, "OFFSETS")
+#                     throw(ArgumentError("Expected OFFSETS block after $first_tok header, got: '$offsets_header'"))
+#                 end
+#                 # If the header line included "OFFSETS vtktypeint64", we already consumed it.
+#                 # Next, read raw Int32 or Int64 depending on type–but legacy VTK uses 32‐bit ints here.
+#                 raw_u_off = Vector{UInt32}(undef, num_offsets)
+#                 read!(io, raw_u_off)
+#                 offsets = Vector{Int}(undef, num_offsets)
+#                 for i in 1:num_offsets
+#                     be_u32 = bswap(raw_u_off[i])
+#                     offsets[i] = Int(be_u32)
+#                 end
+
+#                 # CONNECTIVITY (possibly with type token)
+#                 conn_header = strip(readline(io))
+#                 if !startswith(conn_header, "CONNECTIVITY")
+#                     throw(ArgumentError("Expected CONNECTIVITY block after OFFSETS in $first_tok section, got: '$conn_header'"))
+#                 end
+#                 raw_u_conn = Vector{UInt32}(undef, num_connectivity)
+#                 read!(io, raw_u_conn)
+#                 connectivity = Vector{Int}(undef, num_connectivity)
+#                 for i in 1:num_connectivity
+#                     be_u32 = bswap(raw_u_conn[i])
+#                     connectivity[i] = Int(be_u32)
+#                 end
+
+#                 cells[Symbol(lowercase(parts[1]))] = Dict(
+#                     :offsets      => offsets,
+#                     :connectivity => connectivity
+#                 )
+#             end
+#         end
+
+#         # --- Step 2: Skip lines until "POINT_DATA" ---
+#         while !eof(io)
+#             pos = position(io)
+#             line = strip(readline(io))
+#             if startswith(line, "POINT_DATA")
+#                 seek(io, pos)
+#                 break
+#             end
+#         end
+
+#         # --- Step 3: Read POINT_DATA in binary ---
+#         while !eof(io)
+#             line = strip(readline(io))
+#             if isempty(line)
+#                 continue
+#             end
+
+#             if startswith(line, "POINT_DATA")
+#                 parts = split(line)
+#                 if length(parts) < 2
+#                     throw(ArgumentError("Malformed 'POINT_DATA' line: '$line'"))
+#                 end
+#                 in_point_data = true
+#                 expected_point_data_count = parse(Int, parts[2])
+#                 continue
+#             end
+
+#             # SCALARS block
+#             if in_point_data && startswith(line, "SCALARS")
+#                 scalars_split = split(line)
+#                 if length(scalars_split) < 3
+#                     throw(ArgumentError("Invalid SCALARS definition: '$line'"))
+#                 end
+#                 scalar_name = Symbol(scalars_split[2])
+#                 data_type   = lowercase(scalars_split[3])  # "float", "double", "int", etc.
+#                 num_components = 1
+#                 if length(scalars_split) >= 4
+#                     tmp = tryparse(Int, scalars_split[4])
+#                     if tmp !== nothing
+#                         num_components = tmp
+#                     end
+#                 end
+#                 _ = strip(readline(io))  # "LOOKUP_TABLE default"
+#                 total_vals_needed = expected_point_data_count * num_components
+
+#                 if data_type == "float"
+#                     raw_u = Vector{UInt32}(undef, total_vals_needed)
+#                     read!(io, raw_u)
+#                     data_accum = Vector{Float64}(undef, total_vals_needed)
+#                     for j in 1:total_vals_needed
+#                         be_u32 = bswap(raw_u[j])
+#                         f32   = reinterpret(Float32, be_u32)
+#                         data_accum[j] = Float64(f32)
+#                     end
+#                 elseif data_type == "double"
+#                     raw_u = Vector{UInt64}(undef, total_vals_needed)
+#                     read!(io, raw_u)
+#                     data_accum = Vector{Float64}(undef, total_vals_needed)
+#                     for j in 1:total_vals_needed
+#                         be_u64 = bswap(raw_u[j])
+#                         f64    = reinterpret(Float64, be_u64)
+#                         data_accum[j] = f64
+#                     end
+#                 elseif data_type == "int" || data_type == "long"
+#                     raw_u = Vector{UInt32}(undef, total_vals_needed)
+#                     read!(io, raw_u)
+#                     data_accum = Vector{Int}(undef, total_vals_needed)
+#                     for j in 1:total_vals_needed
+#                         be_u32 = bswap(raw_u[j])
+#                         data_accum[j] = Int(be_u32)
+#                     end
+#                 else
+#                     throw(ArgumentError("Unsupported SCALARS data type '$data_type' for '$scalar_name'."))
+#                 end
+
+#                 if num_components > 1
+#                     point_data[scalar_name] = reshape(data_accum, (num_components, expected_point_data_count))'
+#                 else
+#                     point_data[scalar_name] = data_accum
+#                 end
+
+#             # FIELD block
+#             elseif in_point_data && startswith(line, "FIELD")
+#                 parts = split(line)
+#                 if length(parts) < 3
+#                     throw(ArgumentError("Invalid FIELD line: '$line'"))
+#                 end
+#                 fields_to_read = parse(Int, parts[3])
+#                 while fields_to_read > 0 && !eof(io)
+#                     field_line = strip(readline(io))
+#                     if isempty(field_line)
+#                         continue
+#                     end
+#                     field_parts = split(field_line)
+#                     if length(field_parts) < 4
+#                         throw(ArgumentError("Invalid field definition line: '$field_line'"))
+#                     end
+#                     current_field_name       = Symbol(field_parts[1])
+#                     current_field_components = parse(Int, field_parts[2])
+#                     current_field_points     = parse(Int, field_parts[3])
+#                     data_type                = lowercase(field_parts[4])
+#                     total_field_vals = current_field_components * current_field_points
+
+#                     if data_type == "float"
+#                         raw_u = Vector{UInt32}(undef, total_field_vals)
+#                         read!(io, raw_u)
+#                         float_vals = Vector{Float64}(undef, total_field_vals)
+#                         for j in 1:total_field_vals
+#                             be_u32 = bswap(raw_u[j])
+#                             f32   = reinterpret(Float32, be_u32)
+#                             float_vals[j] = Float64(f32)
+#                         end
+#                         if current_field_components > 1
+#                             point_data[current_field_name] = reshape(float_vals, (current_field_components, current_field_points))'
+#                         else
+#                             point_data[current_field_name] = float_vals
+#                         end
+
+#                     elseif data_type == "double"
+#                         raw_u = Vector{UInt64}(undef, total_field_vals)
+#                         read!(io, raw_u)
+#                         float_vals = Vector{Float64}(undef, total_field_vals)
+#                         for j in 1:total_field_vals
+#                             be_u64 = bswap(raw_u[j])
+#                             f64    = reinterpret(Float64, be_u64)
+#                             float_vals[j] = f64
+#                         end
+#                         if current_field_components > 1
+#                             point_data[current_field_name] = reshape(float_vals, (current_field_components, current_field_points))'
+#                         else
+#                             point_data[current_field_name] = float_vals
+#                         end
+
+#                     elseif data_type == "int" || data_type == "long"
+#                         raw_u = Vector{UInt32}(undef, total_field_vals)
+#                         read!(io, raw_u)
+#                         int_vals = Vector{Int}(undef, total_field_vals)
+#                         for j in 1:total_field_vals
+#                             be_u32 = bswap(raw_u[j])
+#                             int_vals[j] = Int(be_u32)
+#                         end
+#                         if current_field_components > 1
+#                             point_data[current_field_name] = reshape(int_vals, (current_field_components, current_field_points))'
+#                         else
+#                             point_data[current_field_name] = int_vals
+#                         end
+
+#                     else
+#                         throw(ArgumentError("Unsupported FIELD data type '$data_type' for '$current_field_name'."))
+#                     end
+
+#                     fields_to_read -= 1
+#                 end
+
+#             else
+#                 continue
+#             end
+#         end
+#     end
+
+#     # Reshape points
+#     N = div(length(points_accum), 3)
+#     points = reshape(points_accum, (3, N))'
+#     return Dict{Symbol,Any}(
+#         :points     => points,
+#         :point_data => point_data,
+#         :cells      => cells
+#     )
+# end
+
 
 
 

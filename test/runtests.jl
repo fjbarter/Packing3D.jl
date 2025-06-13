@@ -1,5 +1,10 @@
 using Test
+# using Pkg
+# Pkg.activate(joinpath(@__DIR__, ".."))
+# Pkg.instantiate()
 using Packing3D
+using Packing3D.Cartesian: _compute_packing_cartesian
+using Packing3D.Cylindrical: _compute_packing_cylindrical
 
 ###########################################################################
 # MeshModule Tests
@@ -233,4 +238,117 @@ end
     # println(vols)
     @test length(vols) == 2
     @test length(vols_1) == num_cells
+end
+
+
+@testset "SC Lattice Test" begin
+    # parameters for a simple cubic lattice
+    n      = 51               # 51 points per side → 51^3 = 132 651 total
+    radius = 1.0              # sphere radius
+    a      = 2 * radius       # lattice constant
+    offset = a * ((n - 1) / 2)
+
+    # coordinates from -offset to +offset in steps of a
+    xs = -offset:a:offset
+
+    # flatten into vectors
+    x_data = [x for x in xs for y in xs for z in xs]
+    y_data = [y for x in xs for y in xs for z in xs]
+    z_data = [z for x in xs for y in xs for z in xs]
+
+    # build the 3×N point matrix
+    P = hcat(x_data, y_data, z_data)'   # size = (3, n^3)
+
+    # rotation angles (in radians)
+    α = deg2rad(1.0)
+    β = deg2rad(1.0)
+
+    # rotation about x-axis
+    Rx = [
+        1.0      0.0         0.0;
+        0.0  cos(α)   -sin(α);
+        0.0  sin(α)    cos(α)
+    ]
+
+    # rotation about y-axis
+    Ry = [
+       cos(β)  0.0  sin(β);
+         0.0   1.0   0.0;
+      -sin(β)  0.0  cos(β)
+    ]
+
+    # apply Rx then Ry
+    P_rot = Ry * (Rx * P)            # still size (3, n^3)
+    rotated = P_rot'                 # back to (n^3, 3)
+
+    # unpack rotated coordinates
+    x_rot = rotated[:, 1]
+    y_rot = rotated[:, 2]
+    z_rot = rotated[:, 3]
+
+    # sanity checks
+    @test length(x_rot) == n^3
+    @test length(y_rot) == n^3
+    @test length(z_rot) == n^3
+
+    radii = fill(radius, n^3)
+    @test all(r -> r ≈ radius, radii)
+
+    # recompute bounds on rotated lattice
+    minx, maxx = minimum(x_rot), maximum(x_rot)
+    miny, maxy = minimum(y_rot), maximum(y_rot)
+    minz, maxz = minimum(z_rot), maximum(z_rot)
+
+    
+
+    N = 100
+    shift_values = (2 .* rand(N, 1) .- 1) .* radius
+
+    packings_cartesian = zeros(Float64, N)
+    packings_cylindrical = zeros(Float64, N)
+
+    for (i, shift_value) in enumerate(shift_values)
+      boundaries_cartesian = [
+          minx + 3*radius + shift_value, maxx - 3*radius + shift_value,
+          miny + 3*radius + shift_value, maxy - 3*radius + shift_value,
+          minz + 3*radius + shift_value, maxz - 3*radius + shift_value,
+      ]
+
+      boundaries_cylindrical = [
+          -1.0, maxx - 3*radius,
+          0.0, 2*pi,
+          minz + 3*radius + shift_value, maxz - 3*radius + shift_value,
+      ]
+
+      packings_cartesian[i] = _compute_packing_cartesian(;
+        x_data = x_data,
+        y_data = y_data,
+        z_data = z_data,
+        radii = radii,
+        boundaries = boundaries_cartesian,
+        calculate_partial_volumes = true
+      )
+
+      r_data, theta_data = convert_to_cylindrical(x_data, y_data; centre=(shift_value, shift_value))
+
+      packings_cylindrical[i] = _compute_packing_cylindrical(;
+        r_data = r_data,
+        theta_data = theta_data,
+        z_data = z_data,
+        radii = radii,
+        boundaries = boundaries_cylindrical,
+        calculate_partial_volumes = true
+      )
+      
+    end
+
+    mean_cartesian = sum(packings_cartesian) / length(packings_cartesian)
+    mean_cylindrical = sum(packings_cylindrical) / length(packings_cylindrical)
+
+    SC_analytical = pi / 6
+
+    # Check that both partial-volume routines converge to the correct SC value
+    @test abs(mean_cartesian - SC_analytical) < 0.0001
+    @test abs(mean_cylindrical - SC_analytical) < 0.0001
+
 end

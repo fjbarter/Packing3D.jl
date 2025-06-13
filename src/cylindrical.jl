@@ -4,43 +4,36 @@
 
 module Cylindrical
 
-export _compute_packing_cylindrical, _calculate_segregation_intensity_cylindrical, _calculate_lacey_cylindrical, _compute_volume_per_cell_cylindrical
+# Relative imports
+using ..IO:         read_vtk_file, retrieve_coordinates
 
-# Import functions and structs from relevant modules
-# include("io.jl")
-# include("geometry.jl")
-# include("utils.jl")
-# include("cartesian.jl")
-# include("mesh.jl")
+using ..Geometry:   convert_to_cylindrical,
+                    calculate_angular_overlap_factor,
+                    compute_cell_volume,
+                    single_cap_intersection,
+                    double_cap_intersection,
+                    triple_cap_intersection,
+                    sphere_cylinder_intersection,
+                    sphere_cylinder_plane_intersection,
+                    angular_difference
 
-# Import specific functions from modules
-using ..IO: read_vtk_file, retrieve_coordinates
+using ..Utils:      compute_automatic_boundaries,
+                    convert_boundaries_dictionary
 
-using ..Geometry: convert_to_cylindrical,
-                 calculate_angular_overlap_factor,
-                 compute_cell_volume,
-                 single_cap_intersection,
-                 double_cap_intersection,
-                 triple_cap_intersection,
-                 sphere_cylinder_intersection,
-                 sphere_cylinder_plane_intersection,
-                 angular_difference
-
-using ..Utils: compute_automatic_boundaries,
-              calculate_overlaps,
-              calculate_active_overlap_values,
-              is_inside_boundaries,
-              is_outside_boundaries,
-              centre_inside_boundaries,
-              convert_boundaries_dictionary
-
-using ..Cartesian: calculate_particle_volume
+using ..Cartesian:  _calculate_partial_volume_cartesian
 
 using ..MeshModule: Mesh,
-                   get_mesh_boundaries,
-                   get_total_cells,
-                   get_cell_boundaries,
-                   compute_divisions
+                    get_mesh_boundaries,
+                    get_total_cells,
+                    get_cell_boundaries,
+                    compute_divisions
+
+# Exports to Packing3D top-level
+export              _compute_packing_cylindrical,
+                    _calculate_segregation_intensity_cylindrical,
+                    _calculate_lacey_cylindrical,
+                    _compute_volume_per_cell_cylindrical
+
 
 """
     compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
@@ -101,22 +94,32 @@ function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
         boundaries = convert_boundaries_dictionary(boundaries, :cylindrical)
     end
 
-     # Short-circuit for centre-counting
+    # Find number of particles and check that all lengths are equal
+    N = length(radii)
+    if length(r_data) != N || length(theta_data) != N || length(z_data) != N
+        throw(ArgumentError("r_data, theta_data, z_data and radii must all have the same length."))
+    end
+    # now it’s safe to @inbounds over 1:N
+
+    # Compute the cell volume
+    cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cylindrical)
+
+    # Short-circuit for centre-counting
     if !calculate_partial_volumes
-        within_region_mask = centre_inside_boundaries(;
-            x_data=nothing, y_data=nothing, z_data=z_data,
-            r_data=r_data, theta_data=theta_data,
-            boundaries=boundaries,
-            system=:cylindrical
-        )
+        # Predefine accumulator for radius cubed (for volume calculation later)
+        centre_inside_radii_cubed_sum = 0.0
 
-        total_particle_volume = (4/3) * pi * sum((radii[within_region_mask]).^3)
+        @inbounds for i in 1:N
+            r, theta, z, radius = r_data[i], theta_data[i], z_data[i], radii[i]
+            if _centre_inside_cylindrical(
+                    r, theta, z, boundaries
+                )
 
-        cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cylindrical)
+                centre_inside_radii_cubed_sum += radius^3
+            end
+        end
 
-        packing_density = total_particle_volume / cell_volume
-
-        return packing_density
+        return (4/3) * pi * centre_inside_radii_cubed_sum / cell_volume
     end
 
     r_min, r_max, theta_min, theta_max, z_min, z_max = boundaries
@@ -127,147 +130,268 @@ function _compute_packing_cylindrical(; file::Union{String, Nothing}=nothing,
 
     full_cylindrical_cell = r_min < 0.0
 
-    # Step 3: Calculate angular overlap factor
-    factor = calculate_angular_overlap_factor(r_data, radii)
-
-    # Step 4: Calculate overlaps and active overlap values
-    overlaps = calculate_overlaps(; r_data=r_data, theta_data=theta_data, z_data=z_data,
-                                   radii=radii, boundaries=boundaries, factor=factor, system=:cylindrical)
-
-    total_particles = length(radii)
-    active_overlap_values = calculate_active_overlap_values(total_particles;
-                                                            x_data=nothing,
-                                                            y_data=nothing,
-                                                            r_data=r_data,
-                                                            theta_data=theta_data,
-                                                            z_data=z_data,
-                                                            boundaries=boundaries,
-                                                            overlaps=overlaps,
-                                                            system=:cylindrical)
-
-    # Step 6: Determine masks for particles completely inside or outside boundaries
-    inside_mask = is_inside_boundaries(; x_data=nothing, y_data=nothing,
-                                         r_data=r_data, theta_data=theta_data, z_data=z_data,
-                                         boundaries=boundaries, radii=radii,
-                                         factor=factor,
-                                         system=:cylindrical)
-
-    outside_mask = is_outside_boundaries(; x_data=nothing, y_data=nothing,
-                                           r_data=r_data, theta_data=theta_data, z_data=z_data,
-                                           boundaries=boundaries, radii=radii,
-                                           factor=factor,
-                                           system=:cylindrical)
-
     # Enable accurate cylindrical calculation if the full cell condition is met
-    if isnothing(accurate_cylindrical) && full_cylindrical_cell
-        accurate_cylindrical = true
+    if isnothing(accurate_cylindrical)
+        accurate_cylindrical = full_cylindrical_cell ? true : false
     end
 
-    # Step 7: Initialize total particle volume
-    total_particle_volume = (4/3) * pi * sum((radii[inside_mask]).^3)
+    # Then, define the partial volumes function depending on accurate_cylindrical
+    partial_volume_fn = accurate_cylindrical ? 
+        # this closure wraps the cylindrical version
+        (radius, r, all_overlap_values, overlaps) -> _calculate_partial_volume_cylindrical(radius, r, all_overlap_values, overlaps) :
+        # this one wraps the Cartesian (ignores the extra `r` argument)
+        (radius, r, all_overlap_values, overlaps) -> _calculate_partial_volume_cartesian(radius, all_overlap_values, overlaps)
 
-    # Skip fully outside particles and process only "neither" cases
-    neither_mask = .~(inside_mask .| outside_mask)
-    indices_neither = findall(neither_mask)
+    completely_inside_radii_cubed_sum = 0.0
+    total_partial_volume = 0.0
 
-    if !isempty(indices_neither)
-        if accurate_cylindrical
-            # Calculate partial volumes accurately for overlapping particles
-            total_particle_volume += sum(calculate_partial_volumes_cyl(i, radii, active_overlap_values, r_data)
-                                         for i in indices_neither)
-        else
-            # Calculate partial volumes using planar approximation for overlapping particles
-            total_particle_volume += sum(calculate_particle_volume(i, radii, active_overlap_values)
-                                         for i in indices_neither)
+    @inbounds for i in 1:N
+        r, theta, z, radius = r_data[i], theta_data[i], z_data[i], radii[i]
+        if _completely_inside_cylindrical(
+                r, theta, z, radius, boundaries
+            )
+
+            completely_inside_radii_cubed_sum += radius^3
+
+        elseif _does_overlap_cylindrical(
+                r, theta, z, radius, boundaries
+            )
+            
+            all_overlap_values, overlaps = _particle_overlaps_cylindrical(
+                boundaries, r, theta, z, radius
+            )
+
+            total_partial_volume += partial_volume_fn(radius, r, all_overlap_values, overlaps)
+
+        # Else, particle completely outside => skip it
         end
     end
 
-    # Step 8: Compute cell volume
-    cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cylindrical)
+    total_particle_volume = (4/3) * pi * completely_inside_radii_cubed_sum + total_partial_volume
 
-    # Step 9: Calculate packing density
-    packing_density = total_particle_volume / cell_volume
-
-    return packing_density
+    return total_particle_volume/cell_volume
 
 end
 
 
-"""
-    calculate_particle_volume_cyl(i::Int, radii::Vector{Float64}, 
-                                  active_overlap_values::Matrix{Float64}, 
-                                  r_data::Vector{Float64})::Float64
+@inline function _centre_inside_cylindrical(
+        r::Real,
+        theta::Real,
+        z::Real,
+        boundaries::AbstractVector{<:Real}
+    )
 
-Calculate the volume contribution of a particle in a cylindrical system.
+    # Extract boundaries
+    r_min, r_max, theta_min, theta_max, z_min, z_max = boundaries
 
-# Arguments
-- `i::Int`: Index of the particle being evaluated.
-- `radii::Vector{Float64}`: Radii of the particles.
-- `active_overlap_values::Matrix{Float64}`: Overlap distances with boundaries.
-- `r_data::Vector{Float64}`: Radial positions of the particles.
-
-# Returns
-- `Float64`: The volume contribution of the particle.
-"""
-function calculate_partial_volumes_cyl(i::Int,
-                                       radii::Vector{Float64},
-                                       active_overlap_values::Matrix{Float64},
-                                       r_data::Vector{Float64}
-                                       )::Float64
-    # Initialize partial volume
-    partial_volume = 0.0
-
-    # Extract overlaps using nested ternary operators
-    r_overlap = !isnan(active_overlap_values[i, 1]) ? active_overlap_values[i, 1] :
-                (!isnan(active_overlap_values[i, 2]) ? active_overlap_values[i, 2] : nothing)
-
-    theta_overlap = !isnan(active_overlap_values[i, 3]) ? active_overlap_values[i, 3] :
-                   (!isnan(active_overlap_values[i, 4]) ? active_overlap_values[i, 4] : nothing)
-
-    z_overlap = !isnan(active_overlap_values[i, 5]) ? active_overlap_values[i, 5] :
-                (!isnan(active_overlap_values[i, 6]) ? active_overlap_values[i, 6] : nothing)
-
-    # Determine radial overlap type and boundary
-    overlaps_r, min_boundary_r = if !isnan(active_overlap_values[i, 1])
-        (true, true)  # Overlaps with r_min
-    elseif !isnan(active_overlap_values[i, 2])
-        (true, false)  # Overlaps with r_max
-    else
-        (false, false)
+    # Full cylinder: no r_min constraint
+    if r_min < 0 || isapprox(angular_difference(theta_min, theta_max), 2*pi; atol=1e-8)
+        return (
+            (r <= r_max) &&
+            (z >= z_min) &&
+            (z <= z_max)
+        )
     end
 
-    # Check for overlaps in theta and z dimensions
-    overlaps_theta = !isnothing(theta_overlap)
-    overlaps_z = !isnothing(z_overlap)
+    # Handle angular constraints
+    theta_min = mod(theta_min, 2π)
+    theta_max = mod(theta_max, 2π)
+
+    standard_range = theta_min <= theta_max
+    theta_inside = ifelse(
+        standard_range,
+        (theta >= theta_min) && (theta <= theta_max),
+        (theta >= theta_min) || (theta <= theta_max)
+    )
+
+    return (
+        (r >= r_min) &&
+        (r <= r_max) &&
+        theta_inside &&
+        (z >= z_min) &&
+        (z <= z_max)
+    )
+end
+
+
+@inline function _completely_inside_cylindrical(
+        r::Real,
+        theta::Real,
+        z::Real,
+        radius::Real,
+        boundaries::AbstractVector{<:Real}
+    )
+    # Extract boundaries
+    r_min, r_max, theta_min, theta_max, z_min, z_max = boundaries
+
+    # Full cylinder: no r_min constraint
+    if r_min < 0
+        return (
+            (r <= r_max - radius) &&
+            (z >= z_min + radius) &&
+            (z <= z_max - radius)
+        )
+    end
+
+    # Full ring: no angular range constraints
+    if theta_min == 0 && theta_max == 2π
+        return (
+            (r >= r_min .+ radius) &&
+            (r <= r_max .- radius) &&
+            (z >= z_min .+ radius) &&
+            (z <= z_max .- radius)
+        )
+    end
+
+    # Handle angular constraints
+    factor = _calculate_angular_overlap_factor(r, radius)
+
+    theta_min = mod(theta_min + factor, 2π)
+    theta_max = mod(theta_max - factor, 2π)
+
+    # Theta condition for periodic ranges
+    standard_range = (theta_min <= theta_max)
+    theta_inside = ifelse(
+        standard_range,
+        (theta >= theta_min) && (theta <= theta_max),
+        (theta >= theta_min) || (theta <= theta_max)
+    )
+
+    return (
+        (r >= r_min + radius) &&
+        (r <= r_max - radius) &&
+        theta_inside &&
+        (z >= z_min + radius) &&
+        (z <= z_max - radius)
+    )
+end
+
+
+@inline function _does_overlap_cylindrical(
+        r::Real,
+        theta::Real,
+        z::Real,
+        radius::Real,
+        boundaries::AbstractVector{<:Real}
+    )
+    # Extract boundaries
+    r_min, r_max, theta_min, theta_max, z_min, z_max = boundaries
+
+    # Full cylinder: no r_min constraint
+    if r_min < 0
+        return (
+            (r <= r_max + radius) &&
+            (z >= z_min - radius) &&
+            (z <= z_max + radius)
+        )
+    end
+
+    # Full ring: no angular range constraints
+    if theta_min == 0 && theta_max == 2π
+        return (
+            (r >= r_min - radius) &&
+            (r <= r_max + radius) &&
+            (z >= z_min - radius) &&
+            (z <= z_max + radius)
+        )
+    end
+
+    factor = _calculate_angular_overlap_factor(r, radius)
+
+    theta_min = mod(theta_min - factor, 2π)
+    theta_max = mod(theta_max + factor, 2π)
+
+    # Theta condition for periodic ranges
+    standard_range = (theta_min <= theta_max)
+    theta_inside = ifelse(
+        standard_range,
+        (theta >= theta_min) && (theta <= theta_max),
+        (theta >= theta_min) || (theta <= theta_max)
+    )
+
+    return (
+        (r >= r_min - radius) &&
+        (r <= r_max + radius) &&
+        theta_inside &&
+        (z >= z_min - radius) &&
+        (z <= z_max + radius)
+    )
+end
+
+
+@inline function _calculate_angular_overlap_factor(r, radius)
+
+    # Ensure radial distances are safe (prevent division by zero)
+    safe_r = max(r, radius)
+
+    # Calculate angular factor using arcsin, ensuring the ratio is clipped to [-1, 1]
+    factor = asin(clamp(radius / safe_r, -1.0, 1.0))
+
+    return factor
+end
+
+
+@inline function _calculate_partial_volume_cylindrical(
+        radius::Float64,
+        r::Float64,
+        all_overlap_values::Vector{Float64},
+        overlaps::BitVector,
+    )::Float64
+
+    # radial overlap?
+    overlaps_r = overlaps[1] || overlaps[2]
+    if overlaps[1]
+        r_overlap, min_boundary_r = all_overlap_values[1], true
+    elseif overlaps[2]
+        r_overlap, min_boundary_r = all_overlap_values[2], false
+    end
+
+    # angular overlap?
+    overlaps_theta = overlaps[3] || overlaps[4]
+    if overlaps[3]
+        theta_overlap = all_overlap_values[3]
+    elseif overlaps[4]
+        theta_overlap = all_overlap_values[4]
+    end
+
+    # axial (z) overlap?
+    overlaps_z = overlaps[5] || overlaps[6]
+    if overlaps[5]
+        z_overlap = all_overlap_values[5]
+    elseif overlaps[6]
+        z_overlap = all_overlap_values[6]
+    end
 
     # Count the number of overlaps
-    num_overlaps = sum([overlaps_r, overlaps_theta, overlaps_z])
+    num_overlaps = (overlaps_r ? 1 : 0) +
+                   (overlaps_theta ? 1 : 0) +
+                   (overlaps_z ? 1 : 0)
 
     # Calculate partial volume based on the number of overlaps
     if num_overlaps == 1
         if overlaps_r
             partial_volume = sphere_cylinder_intersection(
-                radii[i], r_data[i], r_overlap; min_boundary=min_boundary_r
+                radius, r, r_overlap; min_boundary=min_boundary_r
             )
         elseif overlaps_theta
-            partial_volume = single_cap_intersection(radii[i], theta_overlap)
+            partial_volume = single_cap_intersection(radius, theta_overlap)
         elseif overlaps_z
-            partial_volume = single_cap_intersection(radii[i], z_overlap)
+            partial_volume = single_cap_intersection(radius, z_overlap)
         end
     elseif num_overlaps == 2
         if overlaps_r && overlaps_theta
-            partial_volume = double_cap_intersection(radii[i], r_overlap, theta_overlap)
+            partial_volume = double_cap_intersection(radius, r_overlap, theta_overlap)
         elseif overlaps_r && overlaps_z
             partial_volume = sphere_cylinder_plane_intersection(
-                radii[i], r_data[i], r_overlap, z_overlap; min_boundary=min_boundary_r
+                radius, r, r_overlap, z_overlap; min_boundary=min_boundary_r
             )
         elseif overlaps_theta && overlaps_z
-            partial_volume = double_cap_intersection(radii[i], theta_overlap, z_overlap)
+            partial_volume = double_cap_intersection(radius, theta_overlap, z_overlap)
         end
     elseif num_overlaps == 3
         if overlaps_r && overlaps_theta && overlaps_z
             partial_volume = triple_cap_intersection(
-                radii[i], r_overlap, theta_overlap, z_overlap
+                radius, r_overlap, theta_overlap, z_overlap
             )
         end
     else
@@ -277,6 +401,7 @@ function calculate_partial_volumes_cyl(i::Int,
 
     return partial_volume
 end
+
 
 """
     calculate_segregation_intensity(data_1::Dict, data_2::Dict, cylinder_radius::Float64,
@@ -551,7 +676,7 @@ function compute_partial_volume_per_cell_cylindrical(mesh_boundaries, num_cells,
             continue
         end
         cell_idx = find_global_cell_index_cylindrical([r_idx, theta_idx, z_idx], r_divisions, z_divisions)
-        overlap_values, overlaps = particle_overlaps_cylindrical(mesh_boundaries[cell_idx, :], r_data[i], theta_data[i], z_data[i], radii[i])
+        overlap_values, overlaps = _particle_overlaps_cylindrical(mesh_boundaries[cell_idx, :], r_data[i], theta_data[i], z_data[i], radii[i])
         num_overlaps = sum(overlaps)
 
         overlaps_r = any(overlaps[1:2])
@@ -812,30 +937,53 @@ function compute_centres_volume_per_cell_cylindrical(num_cells, num_particles, p
 end
 
 
-@inline function particle_overlaps_cylindrical(cell_boundaries, r, theta, z, radius)
+
+@inline function _particle_overlaps_cylindrical(
+    cell_boundaries::Vector{Float64},
+    r::Float64,
+    theta::Float64,
+    z::Float64,
+    radius::Float64
+)::Tuple{Vector{Float64}, BitVector}
+
+    # Unpack boundaries
     r_min, r_max, theta_min, theta_max, z_min, z_max = cell_boundaries
-    tolerance = 1e-10
-    overlap_values = [
-        r_min - r,
-        r - r_max,
-        r*sin(angular_difference(theta, theta_min)),
-        r*sin(angular_difference(theta_max, theta)),
-        z_min - z,
-        z - z_max
-    ]
-    if r_min < 0
-        overlaps = [
-            false,
-            -radius - tolerance < overlap_values[2] < radius + tolerance,
-            false,
-            false,
-            -radius - tolerance < overlap_values[5] < radius + tolerance,
-            -radius - tolerance < overlap_values[6] < radius + tolerance,
-        ]
-    else
-        overlaps = -radius - tolerance .< overlap_values .< radius + tolerance
-    end
+
+    # Six signed distances: 
+    # 1) below r_min, 2) above r_max
+    # 3) “below” θ_min, 4) “above” θ_max  (converted to arc‐length)
+    # 5) below z_min, 6) above z_max
     
+
+    # Find which overlaps are valid
+    if r_min < 0
+        # Full cylindrical cell, don't check r_min or theta boundaries
+        overlap_values = Float64[
+            NaN,
+            r     - r_max,
+            NaN,
+            NaN,
+            z_min - z,
+            z     - z_max
+        ]
+
+        overlaps = falses(6)
+        overlaps[2] = abs(overlap_values[2]) < radius
+        overlaps[5] = abs(overlap_values[5]) < radius
+        overlaps[6] = abs(overlap_values[6]) < radius
+    else
+        overlap_values = Float64[
+            r_min - r,
+            r     - r_max,
+            r * sin(angular_difference(theta,    theta_min)),
+            r * sin(angular_difference(theta_max, theta   )),
+            z_min - z,
+            z     - z_max
+        ]
+        
+        overlaps = abs.(overlap_values) .< radius
+    end
+
     return overlap_values, overlaps
 end
 

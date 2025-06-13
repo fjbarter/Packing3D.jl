@@ -4,39 +4,28 @@
 
 module Cartesian
 
-# Import functions and structs from relevant modules
-# include("io.jl")
-# include("geometry.jl")
-# include("utils.jl")
-# include("mesh.jl")
+# Relative imports
+using ..IO:         read_vtk_file, retrieve_coordinates
 
-# Using the modules (if functions are exported)
-# using .IO, .Geometry, .Utils, .Cartesian, .MeshModule
+using ..Geometry:   compute_cell_volume,
+                    single_cap_intersection,
+                    double_cap_intersection,
+                    triple_cap_intersection
 
-# Import specific functions from modules
-using ..IO: read_vtk_file, retrieve_coordinates
-
-using ..Geometry: compute_cell_volume,
-                 single_cap_intersection,
-                 double_cap_intersection,
-                 triple_cap_intersection
-
-using ..Utils: compute_automatic_boundaries,
-              calculate_overlaps,
-              calculate_active_overlap_values,
-              centre_inside_boundaries,
-              is_inside_boundaries,
-              is_outside_boundaries,
-              convert_boundaries_dictionary
+using ..Utils:      compute_automatic_boundaries,
+                    convert_boundaries_dictionary
 
 using ..MeshModule: Mesh,
-                   get_mesh_boundaries,
-                   get_total_cells,
-                   get_cell_boundaries,
-                   compute_divisions
+                    get_mesh_boundaries,
+                    get_total_cells,
+                    get_cell_boundaries,
+                    compute_divisions
 
-
-export _compute_packing_cartesian, _calculate_lacey_cartesian, _calculate_segregation_intensity_cartesian, _compute_volume_per_cell_cartesian
+# Exports to Packing3D top-level
+export              _compute_packing_cartesian,
+                    _calculate_lacey_cartesian,
+                    _calculate_segregation_intensity_cartesian,
+                    _compute_volume_per_cell_cartesian
 
 
 """
@@ -90,84 +79,146 @@ function _compute_packing_cartesian(; file::Union{String, Nothing}=nothing,
         throw(ArgumentError("Boundaries must be a `Vector{Float64}`, `Dict{String, Float64}`, or `nothing`."))
     end
 
-    # Short-circuit for centre-counting
-    if !calculate_partial_volumes
-        within_region_mask = centre_inside_boundaries(;
-            x_data=x_data, y_data=y_data, z_data=z_data,
-            r_data=nothing, theta_data=nothing,
-            boundaries=boundaries,
-            system=:cartesian
-        )
-
-        total_particle_volume = (4/3) * pi * sum((radii[within_region_mask]).^3)
-
-        cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cartesian, cylinder_radius=cylinder_radius)
-
-        packing_density = total_particle_volume / cell_volume
-
-        return packing_density
+    # Find number of particles and check that all lengths are equal
+    N = length(radii)
+    if length(x_data) != N || length(y_data) != N || length(z_data) != N
+        throw(ArgumentError("x_data, y_data, z_data and radii must all have the same length."))
     end
+    # now it’s safe to @inbounds over 1:N
 
-    # Step 3: Calculate overlaps
-    overlaps = calculate_overlaps(; x_data=x_data, y_data=y_data, z_data=z_data,
-                                    r_data=nothing, theta_data=nothing,
-                                    radii=radii, boundaries=boundaries,
-                                    factor=nothing,
-                                    system=:cartesian)
-
-    # Step 4: Calculate active overlap values
-    total_particles = length(radii)
-    active_overlap_values = calculate_active_overlap_values(total_particles; 
-                                                            x_data=x_data, 
-                                                            y_data=y_data, 
-                                                            z_data=z_data,
-                                                            r_data=nothing,
-                                                            theta_data=nothing,
-                                                            boundaries=boundaries, 
-                                                            overlaps=overlaps, 
-                                                            system=:cartesian)
-
-    # Step 6: Get masks for particles fully inside or outside boundaries
-    inside_mask = is_inside_boundaries(; x_data=x_data, y_data=y_data, z_data=z_data,
-                                         r_data=nothing, theta_data=nothing,
-                                         boundaries=boundaries, radii=radii,
-                                         factor=nothing,
-                                         system=:cartesian)
-
-    outside_mask = is_outside_boundaries(; x_data=x_data, y_data=y_data, z_data=z_data,
-                                           r_data=nothing, theta_data=nothing,
-                                           boundaries=boundaries, radii=radii,
-                                           factor=nothing,
-                                           system=:cartesian)
-
-    # Step 7: Initialize total particle volume
-    total_particle_volume = 4/3 * pi * sum((radii[inside_mask]).^3)
-
-    # Step 8: Compute volume for particles neither inside nor outside
-    neither_mask = .~(inside_mask .| outside_mask)
-    indices_neither = findall(neither_mask)
-    
-    # Step 9: Check if neither_mask is empty (all particles in or out)
-    if !isempty(indices_neither)
-        total_particle_volume += sum(calculate_particle_volume(i, radii, active_overlap_values) for i in indices_neither)
-    end
-
-    # Step 10: Compute cell volume
+    # Compute the cell volume
     cell_volume = compute_cell_volume(; boundaries=boundaries, system=:cartesian, cylinder_radius=cylinder_radius)
 
-    # Step 11: Calculate packing density
-    packing_density = total_particle_volume / cell_volume
+    # Short-circuit for centre-counting
+    if !calculate_partial_volumes
+        # Predefine accumulator for radius cubed (for volume calculation later)
+        centre_inside_radii_cubed_sum = 0.0
 
-    return packing_density
+        @inbounds for i in 1:N
+            x, y, z, radius = x_data[i], y_data[i], z_data[i], radii[i]
+            if _centre_inside_cartesian(
+                    x, y, z, boundaries
+                )
+
+                centre_inside_radii_cubed_sum += radius^3
+            end
+        end
+
+        return (4/3) * pi * centre_inside_radii_cubed_sum / cell_volume
+    end
+
+    
+    completely_inside_radii_cubed_sum = 0.0
+    total_partial_volume = 0.0
+
+    @inbounds for i in 1:N
+        x, y, z, radius = x_data[i], y_data[i], z_data[i], radii[i]
+        if _completely_inside_cartesian(
+                x, y, z, radius, boundaries
+            )
+
+            completely_inside_radii_cubed_sum += radius^3
+
+        elseif _does_overlap_cartesian(
+                x, y, z, radius, boundaries
+            )
+
+            all_overlap_values, overlaps = _particle_overlaps_cartesian(
+                boundaries, x, y, z, radius)
+
+            total_partial_volume += _calculate_partial_volume_cartesian(radius, all_overlap_values, overlaps)
+
+        # Else, particle completely outside => skip it
+        end
+    end
+
+    total_particle_volume = (4/3) * pi * completely_inside_radii_cubed_sum + total_partial_volume
+
+    return total_particle_volume/cell_volume
+
 end
 
 
-function calculate_particle_volume(i::Int, radii::Vector{Float64}, active_overlap_values::Matrix{Float64})::Float64
-    # Initialize partial volume to zero
-    partial_volume = 0.0
+@inline function _completely_inside_cartesian(
+        x::Real,
+        y::Real,
+        z::Real,
+        radius::Real,
+        boundaries::AbstractVector{<:Real}
+    )
 
-    # Extract valid overlap distances (non-NaN values)
-    overlap_values = [val for val in active_overlap_values[i, :] if !isnan(val)]
+    # Extract boundaries
+    x_min, x_max, y_min, y_max, z_min, z_max = boundaries
+
+    # Compute boolean
+    return (
+        (x >= x_min + radius) &&
+        (x <= x_max - radius) &&
+        (y >= y_min + radius) &&
+        (y <= y_max - radius) &&
+        (z >= z_min + radius) &&
+        (z <= z_max - radius)
+    )
+end
+
+
+@inline function _centre_inside_cartesian(
+        x::Real,
+        y::Real,
+        z::Real,
+        boundaries::AbstractVector{<:Real}
+    )
+
+    # Extract boundaries
+    x_min, x_max, y_min, y_max, z_min, z_max = boundaries
+
+    # Compute boolean
+    return (
+        (x >= x_min) &&
+        (x <= x_max) &&
+        (y >= y_min) &&
+        (y <= y_max) &&
+        (z >= z_min) &&
+        (z <= z_max)
+    )
+end
+
+
+@inline function _does_overlap_cartesian(
+        x::Real,
+        y::Real,
+        z::Real,
+        radius::Real,
+        boundaries::AbstractVector{<:Real}
+    )
+
+    # Extract boundaries
+    x_min, x_max, y_min, y_max, z_min, z_max = boundaries
+
+    # Compute boolean
+    return (
+        (x >= x_min - radius) &&
+        (x <= x_max + radius) &&
+        (y >= y_min - radius) &&
+        (y <= y_max + radius) &&
+        (z >= z_min - radius) &&
+        (z <= z_max + radius)
+    )
+end
+
+
+
+
+
+
+@inline function _calculate_partial_volume_cartesian(
+        radius::Float64,
+        all_overlap_values::Vector{Float64},
+        overlaps::BitVector
+    )::Float64
+
+    # Quickly strip out NaNs via boolean indexing
+    overlap_values = all_overlap_values[overlaps]
 
     # Determine the number of overlaps for this particle
     number_of_overlaps = length(overlap_values)
@@ -175,13 +226,16 @@ function calculate_particle_volume(i::Int, radii::Vector{Float64}, active_overla
     # Compute partial volume based on the number of overlaps
     if number_of_overlaps == 1
         # Single overlap: Use single-cap intersection geometry
-        partial_volume = single_cap_intersection(radii[i], overlap_values[1])
+        partial_volume = single_cap_intersection(radius, overlap_values[1])
     elseif number_of_overlaps == 2
         # Double overlap: Use double-cap intersection geometry
-        partial_volume = double_cap_intersection(radii[i], overlap_values[1], overlap_values[2])
+        partial_volume = double_cap_intersection(radius, overlap_values[1], overlap_values[2])
     elseif number_of_overlaps == 3
         # Triple overlap: Use triple-cap intersection geometry
-        partial_volume = triple_cap_intersection(radii[i], overlap_values[1], overlap_values[2], overlap_values[3])
+        partial_volume = triple_cap_intersection(radius, overlap_values[1], overlap_values[2], overlap_values[3])
+    else
+        # No valid overlaps (or >3)
+        partial_volume = 0.0
     end
 
     return partial_volume
@@ -362,7 +416,7 @@ function _compute_volume_per_cell_cartesian(data_1::Dict,
     particle_volumes_1 = (4 / 3) * π * (radii_1 .^ 3)
     particle_volumes_2 = (4 / 3) * π * (radii_2 .^ 3)
 
-    max_particle_diameter = 2*maximum(vcat(radii_1, radii_2))
+    max_particle_diameter = 2 * maximum(vcat(radii_1, radii_2))
 
     # Calculate division sizes and individual cell volume
     division_vals = collect(values(divisions))
@@ -583,7 +637,7 @@ end
 
 @inline function _particle_overlaps_cartesian(cell_boundaries, x, y, z, radius)
     x_min, x_max, y_min, y_max, z_min, z_max = cell_boundaries
-    tolerance = 1e-10
+
     overlap_values = [
         x_min - x,
         x - x_max,
@@ -592,9 +646,11 @@ end
         z_min - z,
         z - z_max
     ]
-    
-    overlaps = -radius - tolerance .< overlap_values .< radius + tolerance
 
+    # radius_with_tolerance = radius * (1 + tolerance)
+    # overlaps = abs.(overlap_values) .< radius_with_tolerance
+
+    overlaps = abs.(overlap_values) .< radius
     
     return overlap_values, overlaps
 end

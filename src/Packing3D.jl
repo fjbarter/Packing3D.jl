@@ -235,12 +235,17 @@ function verifies that the required keys are present and converts them to a vect
 - `ArgumentError` if neither `data` nor `file` is provided, if the provided boundaries (when given as a dictionary) are missing any required keys,
   or if the system is not recognized.
 """
-function calculate_packing(; file::Union{String, Nothing}=nothing, data::Union{Dict, Nothing}=nothing,
-                           boundaries, system::Symbol = :cartesian,
-                           cylinder_radius::Union{Float64, Nothing}=nothing,
-                           accurate_cylindrical::Bool = true,
-                           centre::Tuple{<:Real, <:Real} = (0.0, 0.0),
-                           calculate_partial_volumes::Bool = true) :: Float64
+function calculate_packing(;
+    file::Union{String, Nothing}=nothing,
+    data::Union{Dict, Nothing}=nothing,
+    mesh::Union{Mesh, Nothing} = nothing,
+    boundaries, system::Symbol = :cartesian,
+    cylinder_radius::Union{Float64, Nothing}=nothing,
+    accurate_cylindrical::Bool = true,
+    centre::Tuple{<:Real, <:Real} = (0.0, 0.0),
+    calculate_partial_volumes::Bool = true
+)
+
     # If no data is provided, attempt to load it from file.
     if isnothing(data)
         if isnothing(file)
@@ -248,6 +253,17 @@ function calculate_packing(; file::Union{String, Nothing}=nothing, data::Union{D
         else
             data = read_vtk_file(file)
         end
+    end
+
+    # TODO add capability to pass a Mesh and get an array of local packing densities
+    if !isnothing(mesh)
+        # throw(ArgumentError("Mesh local packing capability not yet implemented. Please be patient... :)"))
+        return compute_total_volume_per_cell(
+            data;
+            mesh=mesh,
+            calculate_partial_volumes=calculate_partial_volumes,
+            verbose=verbose
+        ) ./ mesh.cell_volume
     end
 
     # Validate boundaries: if boundaries is a dictionary, check required keys.
