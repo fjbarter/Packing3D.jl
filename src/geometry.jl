@@ -129,7 +129,7 @@ function triple_cap_analytical(R_p, a, b, z_min, z_max; double_cap::Bool=false)
         T2 = ((one_sixth * z3 - half * R_p2 * z) * asin_a_z + one_third * R_p3 * atan_a)
         T3 = (one_sixth * a * (a*a - 3 * R_p2) * asin_z_a - one_third * a * z * sqrt_Rpaz)
         T4 = ((one_sixth * z3 - half * R_p2 * z) * asin_b_z + one_third * R_p3 * atan_b)
-        T5 = (one_sixth * b * (b*b - 3 * R_p2) * safe_asin(safe_div(b, sqrt_Rpz)) - one_third * b * z * sqrt_Rpbz)
+        T5 = (one_sixth * b * (b*b - 3 * R_p2) * asin_z_b - one_third * b * z * sqrt_Rpbz)
         T6 = a * b * z
 
         return T1 + T2 + T3 + T4 + T5 + T6
@@ -262,7 +262,7 @@ end
     # Split the cases to break the volume into its analytical components
     if a^2 + b^2 <= R^2
         # a and b are contained within sphere, double cap intersection exists
-        c_lim_upper = sqrt(max(0, R^2 - a^2 - b^2))
+        # c_lim_upper = sqrt(max(0, R^2 - a^2 - b^2))
         if a < 0 && b < 0
             single_cap_1 = single_cap_intersection(R, -a)
             single_cap_2 = single_cap_intersection(R, -b)
@@ -370,15 +370,22 @@ end
         # This means a triple cap intersection can exist (depending on c)
         if a < 0 && b < 0
             z_double = sqrt(max(0, R^2 - a^2 - b^2))
-            if c >= z_double
+            cap_radius = sqrt(max(0, R^2 - c^2))
+            if c >= sqrt(max(0, R^2 - max(a,b)^2))
                 # Single cap
                 return single_cap_intersection(R, c)
-            elseif c <= -z_double
-                # Double cap minus single cap in c-direction
-                double_cap_volume = double_cap_intersection(R, a, b)
-                single_cap_volume = single_cap_intersection(R, -c)
-                return double_cap_volume - single_cap_volume
-            else
+            elseif c >= sqrt(max(0, R^2 - min(a,b)^2))
+                # Single cap minus double cap
+                single_cap_volume = single_cap_intersection(R, c)
+                double_cap_volume = double_cap_intersection(R, c, -max(a,b))
+                return single_cap_volume - double_cap_volume
+            elseif c >= z_double
+                # Single cap minus two double caps
+                single_cap_volume = single_cap_intersection(R, c)
+                double_cap_volume_a = double_cap_intersection(R, c, -a)
+                double_cap_volume_b = double_cap_intersection(R, c, -b)
+                return single_cap_volume - double_cap_volume_a - double_cap_volume_b
+            elseif c >= -z_double
                 # println("Major triple")
                 # Actual major triple cap
                 # Can be found from sphere volume - remainder volume
@@ -388,6 +395,24 @@ end
                 double_cap_bc = double_cap_intersection(R, -b, c)
                 minor_triple_cap = triple_cap_intersection(R, -a, -b, c)
                 return single_cap - double_cap_ac - double_cap_bc + minor_triple_cap
+            elseif c >= -sqrt(max(0, R^2 - min(a,b)^2))
+                # Double minus (single minus two doubles)
+                double_cap_volume_main = double_cap_intersection(R, a, b)
+                single_cap_volume = single_cap_intersection(R, -c)
+                double_cap_volume_minor_1 = double_cap_intersection(R, -c, -a)
+                double_cap_volume_minor_2 = double_cap_intersection(R, -c, -b)
+                return double_cap_volume_main - (single_cap_volume - double_cap_volume_minor_1 - double_cap_volume_minor_2)
+            elseif c >= -sqrt(max(0, R^2 - max(a,b)^2))
+                # Double cap minus (single minus double)
+                double_cap_volume = double_cap_intersection(R, a, b)
+                single_cap_volume = single_cap_intersection(R, -c)
+                double_cap_volume_minor = double_cap_intersection(R, -c, -max(a,b))
+                return double_cap_volume - (single_cap_volume - double_cap_volume_minor)
+            else
+                # Double cap minus single
+                double_cap_volume = double_cap_intersection(R, a, b)
+                single_cap_volume = single_cap_intersection(R, -c)
+                return double_cap_volume - single_cap_volume
             end
         elseif a < 0
             c_max = sqrt(max(0, R*R - b*b))

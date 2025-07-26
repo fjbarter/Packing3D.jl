@@ -446,7 +446,7 @@ Sample scripts demonstrating usage are provided in the `examples` directory. The
 ## Limitations
 
 - **Particle Shape:**  
-  Optimized for spherical particles.
+  Designed solely for spherical particles.
 
 - **VTK Format:**  
   Only legacy ASCII POLYDATA VTK files are supported. For XML VTK files, consider using [ReadVTK.jl](https://github.com/JuliaVTK/ReadVTK.jl).
