@@ -419,7 +419,7 @@ function _compute_volume_per_cell_cartesian(data_1::Dict,
     max_particle_diameter = 2 * maximum(vcat(radii_1, radii_2))
 
     # Calculate division sizes and individual cell volume
-    division_vals = collect(values(divisions))
+    division_vals = [divisions[:x], divisions[:y], divisions[:z]]
     dx, dy, dz = [L_x, L_y, L_z] ./ division_vals
     cell_volume = dx * dy * dz
     recip_dx, recip_dy, recip_dz = 1 ./ [dx, dy, dz]
